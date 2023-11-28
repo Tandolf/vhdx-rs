@@ -1,28 +1,20 @@
-use nom::{bytes::complete::take, combinator::map, sequence::tuple, Finish, IResult};
-
+use super::{parse_utils::t_sign_u64, signatures::Signature};
 use crate::DeSerialise;
+use nom::{bytes::complete::take, combinator::map, sequence::tuple, IResult};
+use std::io::{Read, Seek};
 
-const FTI_SIZE: usize = 64000;
-const SIGNATURE_SIZE: usize = 8;
-const CREATOR_SIZE: usize = 512;
+const FTI_SIZE: usize = 65536;
 
 #[derive(Debug)]
 pub struct FileTypeIdentifier {
-    pub signature: String,
+    pub signature: Signature,
     pub creator: String,
 }
 
 impl FileTypeIdentifier {
-    fn new(signature: String, creator: String) -> FileTypeIdentifier {
+    fn new(signature: Signature, creator: String) -> FileTypeIdentifier {
         Self { signature, creator }
     }
-}
-
-fn t_signature(buffer: &[u8]) -> IResult<&[u8], String> {
-    map(take(8usize), |bytes: &[u8]| {
-        // Handle utf-8 error
-        String::from_utf8(bytes.to_vec()).unwrap()
-    })(buffer)
 }
 
 fn t_creator(buffer: &[u8]) -> IResult<&[u8], String> {
@@ -39,30 +31,33 @@ fn t_creator(buffer: &[u8]) -> IResult<&[u8], String> {
     })(buffer)
 }
 
-fn t_reserved(buffer: &[u8]) -> IResult<&[u8], &[u8]> {
-    take(FTI_SIZE - SIGNATURE_SIZE - CREATOR_SIZE)(buffer)
-}
+impl<T> DeSerialise<T> for FileTypeIdentifier {
+    type Item = FileTypeIdentifier;
 
-impl<'a> DeSerialise<'a> for FileTypeIdentifier {
-    type Item = (&'a [u8], FileTypeIdentifier);
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; FTI_SIZE];
+        reader.read_exact(&mut buffer)?;
 
-    fn deserialize(buffer: &'a [u8]) -> anyhow::Result<Self::Item> {
-        Ok(map(
-            tuple((t_signature, t_creator, t_reserved)),
-            |(signature, creator, _)| FileTypeIdentifier::new(signature, creator),
-        )(buffer)
-        .finish()
-        .unwrap())
+        let (_, fti) = map(tuple((t_sign_u64, t_creator)), |(signature, creator)| {
+            FileTypeIdentifier::new(signature, creator)
+        })(&buffer)
+        .unwrap();
+        Ok(fti)
     }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
-    fn should_deserialize_fti() {
+    fn parse_fti() {
         let mut values = vec![
             0x76, 0x68, 0x64, 0x78, 0x66, 0x69, 0x6c, 0x65, 0x4d, 0x00, 0x69, 0x00, 0x63, 0x00,
             0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0x6f, 0x00, 0x66, 0x00, 0x74, 0x00, 0x20, 0x00,
@@ -71,11 +66,13 @@ mod tests {
             0x39, 0x00, 0x30, 0x00, 0x34, 0x00, 0x35, 0x00, 0x2e, 0x00, 0x30,
         ];
 
-        values.resize(64000, 0);
+        values.resize(FTI_SIZE, 0);
 
-        let (_, fti) = FileTypeIdentifier::deserialize(&values).unwrap();
+        let mut values = Cursor::new(values);
 
-        assert_eq!("vhdxfile", fti.signature);
+        let fti = FileTypeIdentifier::deserialize(&mut values).unwrap();
+
+        assert_eq!(Signature::Vhdxfile, fti.signature);
         assert_eq!("Microsoft Windows 10.0.19045.0", fti.creator);
     }
 }

@@ -1,20 +1,16 @@
 #![allow(dead_code)]
+use super::{parse_utils::t_sign_u32, signatures::Signature};
+use crate::DeSerialise;
 use nom::{
-    bytes::complete::take,
     combinator::map,
     number::complete::{le_u128, le_u16, le_u32, le_u64},
     sequence::tuple,
     Finish, IResult,
 };
-use std::str;
+use std::io::{Read, Seek};
 use uuid::{Builder, Uuid};
 
-use crate::DeSerialise;
-
-use super::header::SECTION_SIZE;
-
-const HEADER_SIZE: usize = 4096;
-const RESERVED_SIZE: usize = 4016;
+const HEADER_SIZE: usize = 65536;
 
 // Since the header is used to locate the log, updates to the headers cannot be made through the
 // log. To provide power failure consistency, there are two headers in every VHDX file. Each of the
@@ -24,7 +20,7 @@ const RESERVED_SIZE: usize = 4016;
 #[derive(Debug)]
 pub struct Headers {
     // MUST be 0x68656164 which is a UTF-8 string representing "head".
-    signature: String,
+    signature: Signature,
 
     // A CRC-32C hash over the entire 4-KB structure, with the Checksum field taking the value of
     // zero during the computation of the checksum value.
@@ -73,15 +69,15 @@ pub struct Headers {
 
     // A 32-bit unsigned integer. Specifies the size, in bytes of the log. This value MUST be a
     // multiple of 1MB.
-    log_length: u32,
+    pub log_length: u32,
 
     // A 64-bit unsigned integer. Specifies the byte offset in the file of the log. This
     // value MUST be a multiple of 1MB. The log MUST NOT overlap any other structures.
-    log_offset: u64,
+    pub log_offset: u64,
 }
 impl Headers {
     fn new(
-        signature: String,
+        signature: Signature,
         checksum: u32,
         seq_number: u64,
         file_write_guid: Uuid,
@@ -105,16 +101,6 @@ impl Headers {
             log_offset,
         }
     }
-}
-
-fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8]> {
-    take(RESERVED_SIZE + (SECTION_SIZE - HEADER_SIZE))(buffer)
-}
-
-fn t_sign(buffer: &[u8]) -> IResult<&[u8], String> {
-    map(take(4usize), |bytes: &[u8]| {
-        str::from_utf8(bytes).unwrap().to_string()
-    })(buffer)
 }
 
 fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
@@ -148,7 +134,7 @@ fn t_log_offset(buffer: &[u8]) -> IResult<&[u8], u64> {
 fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers> {
     map(
         tuple((
-            t_sign,
+            t_sign_u32,
             t_checksum,
             t_seq,
             t_guid,
@@ -158,7 +144,6 @@ fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers> {
             t_version,
             t_log_length,
             t_log_offset,
-            reserved,
         )),
         |(
             signature,
@@ -171,7 +156,6 @@ fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers> {
             version,
             log_length,
             log_offset,
-            _,
         )| {
             Headers::new(
                 signature,
@@ -189,23 +173,31 @@ fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers> {
     )(buffer)
 }
 
-impl<'a> DeSerialise<'a> for Headers {
-    type Item = (&'a [u8], Headers);
+impl<T> DeSerialise<T> for Headers {
+    type Item = Headers;
 
-    fn deserialize(buffer: &'a [u8]) -> anyhow::Result<Self::Item> {
-        Ok(parse_headers(buffer).finish().unwrap())
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; HEADER_SIZE];
+        reader.read_exact(&mut buffer)?;
+        let (_, headers) = parse_headers(&buffer).finish().unwrap();
+        Ok(headers)
     }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use std::io::Cursor;
+
     use uuid::uuid;
 
     use super::*;
 
     #[test]
-    fn should_deserialize_header() {
+    fn parse_headers() {
         let mut values = vec![
             0x68, 0x65, 0x61, 0x64, 0x6c, 0xef, 0x07, 0x80, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0xcc, 0xe0, 0x65, 0xb3, 0xaa, 0xf1, 0xd8, 0x4b, 0x9c, 0x8d, 0x16, 0x09,
@@ -216,11 +208,12 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        values.resize(64000, 0);
+        values.resize(HEADER_SIZE, 0);
 
-        let (_, headers) = Headers::deserialize(&values).unwrap();
+        let mut values = Cursor::new(values);
+        let headers = Headers::deserialize(&mut values).unwrap();
 
-        assert_eq!("head", headers.signature);
+        assert_eq!(Signature::Head, headers.signature);
         assert_eq!(2148003692, headers.checksum);
         assert_eq!(4, headers.seq_number);
         assert_eq!(

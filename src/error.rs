@@ -1,11 +1,24 @@
-use thiserror::Error;
+use nom::error::ParseError;
 
-#[derive(Error, Debug)]
-pub enum ParseError<'a> {
-    #[error("`{0:?}` is not a valid utf-8 string")]
-    InvalidUtf8Data(&'a [u8]),
-    #[error("`{0:?}` is not a valid utf-16 string")]
-    InvalidUtf16Data(&'a [u16]),
-    #[error("unknown data store error")]
-    Unknown,
+pub struct Error<I> {
+    kind: ErrorKind<I>,
+    backtrace: Vec<Error<I>>,
+}
+
+pub enum ErrorKind<I> {
+    Nom(I, nom::error::ErrorKind),
+}
+
+impl<I> ParseError<I> for Error<I> {
+    fn from_error_kind(input: I, kind: nom::error::ErrorKind) -> Self {
+        Self {
+            kind: ErrorKind::Nom(input, kind),
+            backtrace: Vec::new(),
+        }
+    }
+
+    fn append(input: I, kind: nom::error::ErrorKind, mut other: Self) -> Self {
+        other.backtrace.push(Self::from_error_kind(input, kind));
+        other
+    }
 }

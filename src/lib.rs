@@ -1,12 +1,14 @@
-use anyhow::Result;
+use std::io::{Read, Seek};
 
 pub mod error;
 pub mod vhdx;
 
-pub trait DeSerialise<'a> {
+pub trait DeSerialise<T> {
     type Item;
 
-    fn deserialize(buffer: &'a [u8]) -> Result<Self::Item>;
+    fn deserialize(fs: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek;
 }
 
 #[cfg(test)]

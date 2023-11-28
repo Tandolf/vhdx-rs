@@ -1,0 +1,23 @@
+use super::signatures::{
+    Signature, DATA_SIGN, DESC_SIGN, FTI_SIGN, HEAD_SIGN, LOGE_SIGN, RGT_SIGN, ZERO_SIGN,
+};
+use nom::{bytes::complete::take, combinator::map, IResult};
+
+pub fn t_sign_u64(buffer: &[u8]) -> IResult<&[u8], Signature> {
+    map(take(8usize), |bytes: &[u8]| match bytes {
+        FTI_SIGN => Signature::Vhdxfile,
+        _ => Signature::Unknown,
+    })(buffer)
+}
+
+pub fn t_sign_u32(buffer: &[u8]) -> IResult<&[u8], Signature> {
+    map(take(4usize), |bytes: &[u8]| match bytes {
+        HEAD_SIGN => Signature::Head,
+        RGT_SIGN => Signature::Regi,
+        DESC_SIGN => Signature::Desc,
+        ZERO_SIGN => Signature::Zero,
+        DATA_SIGN => Signature::Data,
+        LOGE_SIGN => Signature::Loge,
+        _ => Signature::Unknown,
+    })(buffer)
+}

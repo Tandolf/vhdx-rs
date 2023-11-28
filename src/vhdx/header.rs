@@ -1,14 +1,19 @@
 #![allow(dead_code)]
+use std::io::{Read, Seek};
+
+use nom::{bytes::complete::take, IResult};
+
 use crate::DeSerialise;
 
 use super::{fti::FileTypeIdentifier, headers::Headers, region_table::RTHeader};
 
 pub const SECTION_SIZE: usize = 64000;
+pub const HEADER_TOTAL_SIZE: usize = 1000000;
 
 #[derive(Debug)]
 pub struct Header {
     fti: FileTypeIdentifier,
-    header_1: Headers,
+    pub header_1: Headers,
     header_2: Headers,
     rt_1: RTHeader,
     rt_2: RTHeader,
@@ -31,27 +36,39 @@ impl Header {
     }
 }
 
-impl<'a> DeSerialise<'a> for Header {
-    type Item = (&'a [u8], Header);
+impl<T> DeSerialise<T> for Header {
+    type Item = Header;
 
-    fn deserialize(buffer: &'a [u8]) -> anyhow::Result<Self::Item> {
-        let (buffer, fti) = FileTypeIdentifier::deserialize(buffer)?;
-        let (buffer, header_1) = Headers::deserialize(buffer)?;
-        let (buffer, header_2) = Headers::deserialize(buffer)?;
-        let (buffer, rt_1) = RTHeader::deserialize(buffer)?;
-        let (buffer, rt_2) = RTHeader::deserialize(buffer)?;
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let fti = FileTypeIdentifier::deserialize(reader)?;
+        let header_1 = Headers::deserialize(reader)?;
+        let header_2 = Headers::deserialize(reader)?;
+        let rt_1 = RTHeader::deserialize(reader)?;
+        let rt_2 = RTHeader::deserialize(reader)?;
+        // let (buffer, _) = reserved(buffer).finish().unwrap();
 
-        Ok((buffer, Header::new(fti, header_1, header_2, rt_1, rt_2)))
+        Ok(Header::new(fti, header_1, header_2, rt_1, rt_2))
     }
+}
+
+fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8]> {
+    take(HEADER_TOTAL_SIZE - (5 * SECTION_SIZE))(buffer)
 }
 
 #[cfg(test)]
 mod tests {
 
+    use std::io::Cursor;
+
+    use crate::vhdx::signatures::Signature;
+
     use super::*;
 
     #[test]
-    fn should_deserialize_rth() {
+    fn parse_file_header() {
         // FTI
         let mut b_fti = vec![
             0x76, 0x68, 0x64, 0x78, 0x66, 0x69, 0x6c, 0x65, 0x4d, 0x00, 0x69, 0x00, 0x63, 0x00,
@@ -98,10 +115,12 @@ mod tests {
         bytes.append(&mut b_region_table_1);
         bytes.append(&mut b_region_table_2);
 
-        let (_, header) = Header::deserialize(&bytes).unwrap();
+        let mut bytes = Cursor::new(bytes);
+
+        let header = Header::deserialize(&mut bytes).unwrap();
 
         dbg!(&header);
 
-        assert_eq!("vhdxfile", header.fti.signature);
+        assert_eq!(Signature::Vhdxfile, header.fti.signature);
     }
 }

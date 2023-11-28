@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use std::io::{Read, Seek, SeekFrom};
+
 use nom::{
     bytes::complete::take,
     combinator::map,
@@ -8,10 +10,13 @@ use nom::{
 };
 use uuid::{Builder, Uuid};
 
-use crate::{vhdx::header::SECTION_SIZE, DeSerialise};
+use crate::DeSerialise;
+
+use super::{parse_utils::t_sign_u32, signatures::Signature};
 
 const HEADER_SIZE: usize = 16;
 const ENTRY_SIZE: usize = 32;
+const RT_HEADER_SIZE: usize = 65536;
 
 // The region table consists of a header followed by a variable number of entries, which specify
 // the identity and location of regions within the file. There are two copies of the region table,
@@ -20,7 +25,7 @@ const ENTRY_SIZE: usize = 32;
 #[derive(Debug)]
 pub struct RTHeader {
     // MUST be 0x72656769, which is a UTF-8 string representing "regi".
-    signature: String,
+    signature: Signature,
     // A CRC-32C hash over the entire 64-KB table, with the Checksum field taking the value of zero
     // during the computation of the checksum value.
     checksum: u32,
@@ -31,7 +36,7 @@ pub struct RTHeader {
     table_entries: Vec<RTEntry>,
 }
 impl RTHeader {
-    fn new(signature: String, checksum: u32, entry_count: usize) -> Self {
+    fn new(signature: Signature, checksum: u32, entry_count: usize) -> Self {
         Self {
             signature,
             checksum,
@@ -39,13 +44,6 @@ impl RTHeader {
             table_entries: Vec::with_capacity(entry_count),
         }
     }
-}
-
-fn t_signature(buffer: &[u8]) -> IResult<&[u8], String> {
-    map(take(4usize), |bytes: &[u8]| {
-        // Handle utf-8 error
-        String::from_utf8(bytes.to_vec()).unwrap()
-    })(buffer)
 }
 
 fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
@@ -66,31 +64,34 @@ fn reserved_length(buffer: &[u8], length: usize) -> IResult<&[u8], &[u8]> {
 
 fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader> {
     map(
-        tuple((t_signature, t_checksum, t_entry_count, reserved)),
+        tuple((t_sign_u32, t_checksum, t_entry_count, reserved)),
         |(signature, checksum, entry_count, _)| {
             RTHeader::new(signature, checksum, entry_count as usize)
         },
     )(buffer)
 }
 
-impl<'a> DeSerialise<'a> for RTHeader {
-    type Item = (&'a [u8], RTHeader);
+impl<T> DeSerialise<T> for RTHeader {
+    type Item = RTHeader;
 
-    fn deserialize(buffer: &'a [u8]) -> anyhow::Result<Self::Item> {
-        let (mut buffer, mut header) = parse_header(buffer).finish().unwrap();
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; HEADER_SIZE];
+        reader.read_exact(&mut buffer)?;
+        let (_, mut header) = parse_header(&buffer).finish().unwrap();
         let mut entry;
+        let mut offset = RT_HEADER_SIZE - HEADER_SIZE;
         for _ in 0..header.entry_count {
-            (buffer, entry) = RTEntry::deserialize(buffer)?;
+            entry = RTEntry::deserialize(reader)?;
             header.table_entries.push(entry);
+            offset -= ENTRY_SIZE;
         }
 
-        let r_length = SECTION_SIZE - (HEADER_SIZE + (header.entry_count * ENTRY_SIZE));
+        reader.seek(SeekFrom::Current(offset as i64))?;
 
-        let (buffer, _) = reserved_length(buffer, r_length).finish().unwrap();
-
-        // dbg!(&buffer[0..100]);
-
-        Ok((buffer, header))
+        Ok(header)
     }
 }
 
@@ -144,17 +145,25 @@ fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry> {
     )(buffer)
 }
 
-impl<'a> DeSerialise<'a> for RTEntry {
-    type Item = (&'a [u8], RTEntry);
+impl<T> DeSerialise<T> for RTEntry {
+    type Item = RTEntry;
 
-    fn deserialize(buffer: &'a [u8]) -> anyhow::Result<Self::Item> {
-        let (buffer, entry) = parse_entry(buffer).finish().unwrap();
-        Ok((buffer, entry))
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; 32];
+
+        reader.read_exact(&mut buffer)?;
+        let (_, entry) = parse_entry(&buffer).finish().unwrap();
+        Ok(entry)
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use std::io::Cursor;
 
     use super::*;
 
@@ -170,12 +179,14 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        values.resize(64000, 0);
+        values.resize(RT_HEADER_SIZE, 0);
 
-        let (_, rth) = RTHeader::deserialize(&values).unwrap();
+        let mut values = Cursor::new(values);
+
+        let rth = RTHeader::deserialize(&mut values).unwrap();
 
         dbg!(&rth);
 
-        assert_eq!("regi", rth.signature);
+        assert_eq!(Signature::Regi, rth.signature);
     }
 }
