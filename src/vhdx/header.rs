@@ -15,8 +15,8 @@ pub struct Header {
     fti: FileTypeIdentifier,
     pub header_1: Headers,
     header_2: Headers,
-    rt_1: RTHeader,
-    rt_2: RTHeader,
+    pub rt_1: RTHeader,
+    pub rt_2: RTHeader,
 }
 impl Header {
     fn new(

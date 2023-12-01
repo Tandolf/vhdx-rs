@@ -1,5 +1,8 @@
 #![allow(dead_code)]
-use super::{parse_utils::t_sign_u32, signatures::Signature};
+use super::{
+    parse_utils::{t_guid, t_sign_u32},
+    signatures::Signature,
+};
 use crate::DeSerialise;
 use nom::{
     combinator::map,
@@ -109,10 +112,6 @@ fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
 
 fn t_seq(buffer: &[u8]) -> IResult<&[u8], u64> {
     le_u64(buffer)
-}
-
-fn t_guid(buffer: &[u8]) -> IResult<&[u8], Uuid> {
-    map(le_u128, |v: u128| Builder::from_u128_le(v).into_uuid())(buffer)
 }
 
 fn t_log_version(buffer: &[u8]) -> IResult<&[u8], u16> {

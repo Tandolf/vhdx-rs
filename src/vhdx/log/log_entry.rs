@@ -16,13 +16,13 @@ use crate::{
 
 use super::entry_header::Header;
 
-pub const DATA_SECTOR_SIZE: usize = 4096;
-pub const DATA_DESC_SIZE: usize = 64;
-pub const ZERO_DESC_SIZE: usize = 32;
+pub const SECTOR_SIZE: usize = 4096;
+pub const DESC_SIZE: usize = 32;
+pub const LOG_HEADER_SIZE: usize = 64;
 
 #[derive(Debug)]
 pub struct LogEntry {
-    header: Header,
+    pub header: Header,
     descriptors: Vec<Descriptor>,
 }
 
@@ -38,14 +38,52 @@ impl LogEntry {
 impl<T> DeSerialise<T> for LogEntry {
     type Item = LogEntry;
 
-    fn deserialize(buffer: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
     where
         T: Read + Seek,
     {
-        let header = Header::deserialize(buffer)?;
-        for _ in 0..header.descript_count {}
+        let start_pos = reader.stream_position()?;
+        let header = Header::deserialize(reader)?;
+        let mut descriptors = Vec::with_capacity(header.descript_count);
+        if header.descript_count != 0 {
+            for _ in 0..header.descript_count {
+                let desc = Descriptor::deserialize(reader)?;
+                descriptors.push(desc);
+            }
+        }
+        let current_pos = reader.stream_position()?;
+        let offset = SECTOR_SIZE as u64 - (current_pos - start_pos);
+        reader.seek(std::io::SeekFrom::Current(offset as i64))?;
 
-        Ok(LogEntry::new(header, Vec::new()))
+        for desc in descriptors.iter_mut().filter(|v| {
+            matches!(
+                v,
+                Descriptor::Data {
+                    signature: _,
+                    trailing_bytes: _,
+                    leading_bytes: _,
+                    file_offset: _,
+                    seq_number: _,
+                    data_sector: _,
+                }
+            )
+        }) {
+            let d_sector = DataSector::deserialize(reader)?;
+            if let Descriptor::Data {
+                signature: _,
+                trailing_bytes: _,
+                leading_bytes: _,
+                file_offset: _,
+                seq_number: _,
+                data_sector,
+            } = desc
+            {
+                *data_sector = Some(d_sector);
+            }
+        }
+
+        let log_entry = LogEntry::new(header, descriptors);
+        Ok(log_entry)
     }
 }
 
@@ -99,14 +137,14 @@ impl<T> DeSerialise<T> for Descriptor {
     where
         T: Read + Seek,
     {
-        let mut buffer = [0, 32];
+        let mut buffer = [0; 32];
         reader.read_exact(&mut buffer)?;
         let mut peeker = peek(t_sign_u32);
         let (buffer, signature) = peeker(&buffer).unwrap();
         let (_, descriptor) = match signature {
             Signature::Desc => parse_desc(buffer).unwrap(),
             Signature::Zero => parse_zero(buffer).unwrap(),
-            _ => todo!(),
+            _ => panic!("Unknown file format, expected Data/Zero descriptor"),
         };
         Ok(descriptor)
     }
@@ -138,14 +176,13 @@ fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor> {
     )(buffer)
 }
 
-#[derive(Debug)]
 struct DataSector {
     // DataSignature (4 bytes): MUST be 0x61746164 ("data" as ASCII).
-    signature: String,
+    signature: Signature,
 
     // SequenceHigh (4 bytes): MUST
     // contain the four most significant bytes of the SequenceNumber field of the associated entry.
-    seq_high: u32,
+    seq_high: Vec<u8>,
 
     // Data (4084 bytes): Contains the raw data associated with the update, bytes 8 through 4,091,
     // inclusive. Bytes 0 through 7 and 4,092 through 4,096 are stored in the data descriptor, in
@@ -154,5 +191,44 @@ struct DataSector {
     //
     // SequenceLow (4 bytes): MUST contain
     // the four least significant bytes of the SequenceNumber field of the associated entry.
-    seq_low: u32,
+    seq_low: Vec<u8>,
+}
+impl DataSector {
+    fn new(signature: Signature, seq_high: &[u8], data: &[u8], seq_low: &[u8]) -> Self {
+        Self {
+            signature,
+            seq_high: seq_high.to_vec(),
+            data: data.to_vec(),
+            seq_low: seq_low.to_vec(),
+        }
+    }
+}
+
+impl<T> DeSerialise<T> for DataSector {
+    type Item = DataSector;
+
+    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; 4096];
+        reader.read_exact(&mut buffer)?;
+        let (_, data_sector) = map(
+            tuple((t_sign_u32, take(4usize), take(4084usize), take(4usize))),
+            |(signature, sequence_high, data, sequence_low)| {
+                DataSector::new(signature, sequence_high, data, sequence_low)
+            },
+        )(&buffer)
+        .unwrap();
+
+        Ok(data_sector)
+    }
+}
+
+impl std::fmt::Debug for DataSector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataSector")
+            .field("signature", &self.signature)
+            .finish()
+    }
 }

@@ -29,11 +29,9 @@ pub struct RTHeader {
     // A CRC-32C hash over the entire 64-KB table, with the Checksum field taking the value of zero
     // during the computation of the checksum value.
     checksum: u32,
-    // A CRC-32C hash over the entire 64-KB table, with the Checksum field taking the value of zero
-    // during the computation of the checksum value.
     entry_count: usize,
 
-    table_entries: Vec<RTEntry>,
+    pub table_entries: Vec<RTEntry>,
 }
 impl RTHeader {
     fn new(signature: Signature, checksum: u32, entry_count: usize) -> Self {
@@ -99,10 +97,10 @@ impl<T> DeSerialise<T> for RTHeader {
 pub struct RTEntry {
     // Guid (16 bytes): Specifies a 128-bit identifier for the object (a GUID in binary form) and
     // MUST be unique within the table.
-    guid: Uuid,
+    pub guid: Uuid,
     // FileOffset (8 bytes): Specifies the 64-bit byte offset of the object within the file. The
     // value MUST be a multiple of 1 MB and MUST be at least 1 MB.
-    file_offset: u64,
+    pub file_offset: u64,
     // Length (4 bytes): Specifies the 32-bit byte length of the object within the file. The value
     // MUST be a multiple of 1 MB.
     length: u32,
