@@ -10,7 +10,7 @@ use std::io::{Read, Seek, SeekFrom};
 use super::{
     header::Header,
     log::{log::Log, log_entry::LogEntry},
-    metadata::{Entry, MetaData},
+    metadata::MetaData,
 };
 
 #[derive(Debug)]
@@ -63,13 +63,7 @@ impl Vhdx {
             .seek(SeekFrom::Start(meta_data_info.file_offset))
             .unwrap();
 
-        let mut meta_data = MetaData::deserialize(reader).unwrap();
-
-        for _ in 0..meta_data.entry_count {
-            let entry = Entry::deserialize(reader).unwrap();
-            meta_data.entries.push(entry);
-        }
-
+        let meta_data = MetaData::deserialize(reader).unwrap();
         Vhdx {
             header,
             log: Log { log_entries },

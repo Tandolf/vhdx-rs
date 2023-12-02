@@ -1,13 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::SeekFrom};
 
 use nom::{
     bits,
     bytes::complete::take,
     combinator::map,
-    number::{
-        complete::{le_u16, le_u32},
-        streaming::be_u32,
-    },
+    number::complete::{le_u16, le_u32, le_u64},
     sequence::tuple,
     IResult,
 };
@@ -16,8 +13,9 @@ use uuid::Uuid;
 use crate::DeSerialise;
 
 use super::{
-    parse_utils::{parse_bool, t_guid, t_sign_u64, BitInput},
-    signatures::Signature,
+    bits_parsers::{t_2_flags_u32, t_3_flags_u32},
+    parse_utils::{t_guid, t_sign_u64},
+    signatures::{Signature, FILE_PARAMETERS, VIRTUAL_DISK_SIZE},
 };
 
 #[derive(Debug)]
@@ -33,11 +31,11 @@ pub struct MetaData {
     pub entries: Vec<Entry>,
 }
 impl MetaData {
-    fn new(signature: Signature, entry_count: u16) -> Self {
+    fn new(signature: Signature, entry_count: u16, entries: Vec<Entry>) -> Self {
         Self {
             signature,
             entry_count,
-            entries: Vec::new(),
+            entries,
         }
     }
 }
@@ -49,28 +47,73 @@ impl<T> DeSerialise<T> for MetaData {
     where
         T: std::io::Read + std::io::Seek,
     {
+        let start_pos = reader.stream_position()?;
+
         let mut buffer = [0; 32];
         reader.read_exact(&mut buffer)?;
-        let (_, meta_data) = parse_meta_data(&buffer).unwrap();
-        Ok(meta_data)
+        let (_, (signature, entry_count)) = parse_header(&buffer).unwrap();
+
+        let mut entries = Vec::new();
+        for _ in 0..2 {
+            let mut buffer = [0; 32];
+            reader.read_exact(&mut buffer)?;
+
+            let (_, (signature, offset, length, a, b, c)) = parse_entry(&buffer).unwrap();
+
+            let start_next = reader.stream_position()?;
+
+            let entry = match signature {
+                FILE_PARAMETERS => {
+                    reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
+                    let mut buffer = [0; 8];
+                    reader.read_exact(&mut buffer)?;
+                    let (_, file_parameters) = parse_file_params(&buffer).unwrap();
+                    Entry::new(signature, offset, length, a, b, c, file_parameters)
+                }
+                VIRTUAL_DISK_SIZE => {
+                    reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
+                    let mut buffer = [0; 8];
+                    reader.read_exact(&mut buffer)?;
+                    let (_, vds) = t_v_disk_size(&buffer).unwrap();
+                    Entry::new(
+                        signature,
+                        offset,
+                        length,
+                        a,
+                        b,
+                        c,
+                        MDKnownEntries::VirtualDiskSize(vds),
+                    )
+                }
+                _ => panic!("foobar"),
+            };
+            entries.push(entry);
+            reader.seek(SeekFrom::Start(start_next))?;
+        }
+        Ok(MetaData::new(signature, entry_count, entries))
     }
 }
 
-fn parse_meta_data(reader: &[u8]) -> IResult<&[u8], MetaData> {
+fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16)> {
     map(
         tuple((t_sign_u64, le_u16, le_u16, take(20usize))),
-        |(signature, _, entry_count, _)| MetaData::new(signature, entry_count),
+        |(signature, _, entry_count, _)| (signature, entry_count),
     )(reader)
+}
+
+fn t_v_disk_size(buffer: &[u8]) -> IResult<&[u8], u64> {
+    le_u64(buffer)
 }
 
 #[derive(Debug)]
 pub struct Entry {
-    item_id: Uuid,
-    offset: usize,
-    length: usize,
+    pub item_id: Uuid,
+    pub offset: usize,
+    pub length: usize,
     is_user: bool,
     is_virtual_disk: bool,
     is_required: bool,
+    data: MDKnownEntries,
 }
 impl Entry {
     fn new(
@@ -80,6 +123,7 @@ impl Entry {
         is_user: bool,
         is_virtual_disk: bool,
         is_required: bool,
+        data: MDKnownEntries,
     ) -> Entry {
         Self {
             item_id,
@@ -88,29 +132,16 @@ impl Entry {
             is_user,
             is_virtual_disk,
             is_required,
+            data,
         }
     }
 }
 
-impl<T> DeSerialise<T> for Entry {
-    type Item = Entry;
-
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
-    where
-        T: std::io::Read + std::io::Seek,
-    {
-        let mut buffer = [0; 32];
-        reader.read_exact(&mut buffer)?;
-        let (_, entry) = parse_entry(&buffer).unwrap();
-        Ok(entry)
-    }
-}
-
-fn parse_entry(buffer: &[u8]) -> IResult<&[u8], Entry> {
+fn parse_entry(buffer: &[u8]) -> IResult<&[u8], (Uuid, usize, usize, bool, bool, bool)> {
     map(
-        tuple((t_guid, le_u32, le_u32, bits(parse_flags), take(7usize))),
+        tuple((t_guid, le_u32, le_u32, bits(t_3_flags_u32), take(7usize))),
         |(guid, offset, length, (is_user, is_virtual_disk, is_required), _)| {
-            Entry::new(
+            (
                 guid,
                 offset as usize,
                 length as usize,
@@ -122,22 +153,23 @@ fn parse_entry(buffer: &[u8]) -> IResult<&[u8], Entry> {
     )(buffer)
 }
 
-fn parse_flags(input: BitInput) -> IResult<BitInput, (bool, bool, bool)> {
-    dbg!(input);
+fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], MDKnownEntries> {
     map(
-        tuple((
-            nom::bits::complete::take(5usize),
-            parse_bool,
-            parse_bool,
-            parse_bool,
-        )),
-        |(_, a, b, c): (u8, bool, bool, bool)| (c, b, a),
-    )(input)
+        tuple((le_u32, bits(t_2_flags_u32))),
+        |(block_size, (leave_block_allocated, has_parent)): (u32, (bool, bool))| {
+            MDKnownEntries::FileParameters {
+                block_size: block_size as usize,
+                leave_block_allocated,
+                has_parent,
+            }
+        },
+    )(buffer)
 }
 
-pub enum MetaDataItems {
+#[derive(Debug)]
+pub enum MDKnownEntries {
     FileParameters {
-        block_size: u32,
+        block_size: usize,
         leave_block_allocated: bool,
         has_parent: bool,
     },
@@ -152,11 +184,13 @@ pub enum MetaDataItems {
     },
 }
 
+#[derive(Debug)]
 pub enum SectorSize {
     Small = 512,
     Large = 4096,
 }
 
+#[derive(Debug)]
 pub enum LocatorTypeEntry {
     Guid(Uuid),
     Path(String),

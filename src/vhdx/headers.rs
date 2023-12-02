@@ -6,12 +6,12 @@ use super::{
 use crate::DeSerialise;
 use nom::{
     combinator::map,
-    number::complete::{le_u128, le_u16, le_u32, le_u64},
+    number::complete::{le_u16, le_u32, le_u64},
     sequence::tuple,
     Finish, IResult,
 };
 use std::io::{Read, Seek};
-use uuid::{Builder, Uuid};
+use uuid::Uuid;
 
 const HEADER_SIZE: usize = 65536;
 

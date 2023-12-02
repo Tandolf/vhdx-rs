@@ -1,3 +1,4 @@
+pub mod bits_parsers;
 pub mod fti;
 pub mod header;
 pub mod headers;
