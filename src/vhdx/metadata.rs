@@ -10,12 +10,14 @@ use nom::{
 };
 use uuid::Uuid;
 
-use crate::DeSerialise;
+use crate::{vhdx::signatures::PHYSICAL_SECTOR_SIZE, DeSerialise};
 
 use super::{
     bits_parsers::{t_2_flags_u32, t_3_flags_u32},
     parse_utils::{t_guid, t_sign_u64},
-    signatures::{Signature, FILE_PARAMETERS, VIRTUAL_DISK_SIZE},
+    signatures::{
+        Signature, FILE_PARAMETERS, LOGICAL_SECTOR_SIZE, VIRTUAL_DISK_ID, VIRTUAL_DISK_SIZE,
+    },
 };
 
 #[derive(Debug)]
@@ -54,7 +56,7 @@ impl<T> DeSerialise<T> for MetaData {
         let (_, (signature, entry_count)) = parse_header(&buffer).unwrap();
 
         let mut entries = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..5 {
             let mut buffer = [0; 32];
             reader.read_exact(&mut buffer)?;
 
@@ -62,6 +64,7 @@ impl<T> DeSerialise<T> for MetaData {
 
             let start_next = reader.stream_position()?;
 
+            dbg!(&signature);
             let entry = match signature {
                 FILE_PARAMETERS => {
                     reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
@@ -85,6 +88,51 @@ impl<T> DeSerialise<T> for MetaData {
                         MDKnownEntries::VirtualDiskSize(vds),
                     )
                 }
+                VIRTUAL_DISK_ID => {
+                    reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
+                    let mut buffer = [0; 16];
+                    reader.read_exact(&mut buffer)?;
+                    let (_, vd_id) = t_guid(&buffer).unwrap();
+                    Entry::new(
+                        signature,
+                        offset,
+                        length,
+                        a,
+                        b,
+                        c,
+                        MDKnownEntries::VirtualDiskID(vd_id),
+                    )
+                }
+                LOGICAL_SECTOR_SIZE => {
+                    reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
+                    let mut buffer = [0; 4];
+                    reader.read_exact(&mut buffer)?;
+                    let (_, sector_size) = t_sector_size(&buffer).unwrap();
+                    Entry::new(
+                        signature,
+                        offset,
+                        length,
+                        a,
+                        b,
+                        c,
+                        MDKnownEntries::LogicalSectorSize(sector_size),
+                    )
+                }
+                PHYSICAL_SECTOR_SIZE => {
+                    reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
+                    let mut buffer = [0; 4];
+                    reader.read_exact(&mut buffer)?;
+                    let (_, sector_size) = t_sector_size(&buffer).unwrap();
+                    Entry::new(
+                        signature,
+                        offset,
+                        length,
+                        a,
+                        b,
+                        c,
+                        MDKnownEntries::PhysicalSectorSize(sector_size),
+                    )
+                }
                 _ => panic!("foobar"),
             };
             entries.push(entry);
@@ -92,6 +140,14 @@ impl<T> DeSerialise<T> for MetaData {
         }
         Ok(MetaData::new(signature, entry_count, entries))
     }
+}
+
+fn t_sector_size(buffer: &[u8]) -> IResult<&[u8], SectorSize> {
+    map(le_u32, |v: u32| match v {
+        512 => SectorSize::Small,
+        4096 => SectorSize::Large,
+        _ => SectorSize::Unknown,
+    })(buffer)
 }
 
 fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16)> {
@@ -188,6 +244,7 @@ pub enum MDKnownEntries {
 pub enum SectorSize {
     Small = 512,
     Large = 4096,
+    Unknown = -1,
 }
 
 #[derive(Debug)]
