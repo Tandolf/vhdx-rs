@@ -2,15 +2,21 @@ use nom::combinator::peek;
 use uuid::Uuid;
 
 use crate::{
-    vhdx::{parse_utils::t_sign_u32, signatures::Signature},
+    vhdx::{
+        metadata::MDKnownEntries,
+        parse_utils::t_sign_u32,
+        signatures::{Signature, LOGICAL_SECTOR_SIZE},
+    },
     DeSerialise,
 };
 use std::io::{Read, Seek, SeekFrom};
 
 use super::{
+    bat_entry::BatEntry,
     header::Header,
     log::{log::Log, log_entry::LogEntry},
     metadata::MetaData,
+    signatures::FILE_PARAMETERS,
 };
 
 #[derive(Debug)]
@@ -59,11 +65,56 @@ impl Vhdx {
             .find(|v| v.guid == Uuid::parse_str("8B7CA20647904B9AB8FE575F050F886E").unwrap())
             .unwrap();
 
+        let bat_table_info = header
+            .rt_1
+            .table_entries
+            .iter()
+            .find(|v| v.guid == Uuid::parse_str("2DC27766F62342009D64115E9BFD4A08").unwrap())
+            .unwrap();
+
         reader
             .seek(SeekFrom::Start(meta_data_info.file_offset))
             .unwrap();
 
         let meta_data = MetaData::deserialize(reader).unwrap();
+
+        let fp_entry = meta_data
+            .entries
+            .iter()
+            .find(|v| v.item_id == FILE_PARAMETERS)
+            .unwrap();
+
+        let lss = meta_data
+            .entries
+            .iter()
+            .find(|v| v.item_id == LOGICAL_SECTOR_SIZE)
+            .unwrap();
+
+        let block_size = if let MDKnownEntries::FileParameters {
+            block_size,
+            leave_block_allocated: _,
+            has_parent: _,
+        } = fp_entry.data
+        {
+            if let MDKnownEntries::LogicalSectorSize(sector_size) = lss.data {
+                ((2_u64.pow(23)) * sector_size as u64) / block_size as u64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        dbg!(block_size);
+
+        reader
+            .seek(SeekFrom::Start(bat_table_info.file_offset))
+            .unwrap();
+
+        let bat_entry = BatEntry::deserialize(reader).unwrap();
+
+        dbg!(bat_entry);
+
         Vhdx {
             header,
             log: Log { log_entries },

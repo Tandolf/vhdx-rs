@@ -64,7 +64,6 @@ impl<T> DeSerialise<T> for MetaData {
 
             let start_next = reader.stream_position()?;
 
-            dbg!(&signature);
             let entry = match signature {
                 FILE_PARAMETERS => {
                     reader.seek(SeekFrom::Start(start_pos + offset as u64))?;
@@ -169,7 +168,7 @@ pub struct Entry {
     is_user: bool,
     is_virtual_disk: bool,
     is_required: bool,
-    data: MDKnownEntries,
+    pub data: MDKnownEntries,
 }
 impl Entry {
     fn new(
@@ -240,7 +239,7 @@ pub enum MDKnownEntries {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum SectorSize {
     Small = 512,
     Large = 4096,
