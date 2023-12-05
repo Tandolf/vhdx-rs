@@ -1,5 +1,6 @@
 pub mod bat_entry;
 pub mod bat_table;
+pub mod bat_utils;
 pub mod bits_parsers;
 pub mod fti;
 pub mod header;

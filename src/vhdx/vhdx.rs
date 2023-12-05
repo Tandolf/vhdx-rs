@@ -3,9 +3,12 @@ use uuid::Uuid;
 
 use crate::{
     vhdx::{
-        metadata::MDKnownEntries,
+        bat_utils::{
+            calc_chunk_ratio, calc_payload_blocks_count, calc_sector_bitmap_blocks_count,
+            calc_total_bat_entries_differencing, calc_total_bat_entries_fixed_dynamic,
+        },
         parse_utils::t_sign_u32,
-        signatures::{Signature, LOGICAL_SECTOR_SIZE},
+        signatures::Signature,
     },
     DeSerialise,
 };
@@ -16,14 +19,13 @@ use super::{
     header::Header,
     log::{log::Log, log_entry::LogEntry},
     metadata::MetaData,
-    signatures::FILE_PARAMETERS,
 };
 
 #[derive(Debug)]
 pub struct Vhdx {
-    header: Header,
-    log: Log,
-    meta_data: MetaData,
+    pub header: Header,
+    pub log: Log,
+    pub meta_data: MetaData,
 }
 
 impl Vhdx {
@@ -77,35 +79,6 @@ impl Vhdx {
             .unwrap();
 
         let meta_data = MetaData::deserialize(reader).unwrap();
-
-        let fp_entry = meta_data
-            .entries
-            .iter()
-            .find(|v| v.item_id == FILE_PARAMETERS)
-            .unwrap();
-
-        let lss = meta_data
-            .entries
-            .iter()
-            .find(|v| v.item_id == LOGICAL_SECTOR_SIZE)
-            .unwrap();
-
-        let block_size = if let MDKnownEntries::FileParameters {
-            block_size,
-            leave_block_allocated: _,
-            has_parent: _,
-        } = fp_entry.data
-        {
-            if let MDKnownEntries::LogicalSectorSize(sector_size) = lss.data {
-                ((2_u64.pow(23)) * sector_size as u64) / block_size as u64
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-        dbg!(block_size);
 
         reader
             .seek(SeekFrom::Start(bat_table_info.file_offset))
