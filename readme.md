@@ -3,7 +3,7 @@ a parsing library for reading the vhdx file format.
 
 Current output:
 
-```json
+```
 {
     Vhdx {
         header: Header {
