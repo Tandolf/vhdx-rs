@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::io::{Read, Seek, SeekFrom};
 
 use nom::{
@@ -8,11 +7,14 @@ use nom::{
     sequence::tuple,
     Finish, IResult,
 };
-use uuid::{Builder, Uuid};
+use uuid::Uuid;
 
-use crate::DeSerialise;
+use crate::{error::ErrorKind, DeSerialise};
 
-use super::{parse_utils::t_sign_u32, signatures::Signature};
+use super::{
+    parse_utils::{t_bool_u32, t_guid, t_sign_u32, t_u32, t_u64},
+    signatures::Signature,
+};
 
 const HEADER_SIZE: usize = 16;
 const ENTRY_SIZE: usize = 32;
@@ -44,25 +46,13 @@ impl RTHeader {
     }
 }
 
-fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
-}
-
-fn t_entry_count(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
-}
-
-fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8]> {
+fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8], ErrorKind<&[u8]>> {
     take(4usize)(buffer)
 }
 
-fn reserved_length(buffer: &[u8], length: usize) -> IResult<&[u8], &[u8]> {
-    take(length)(buffer)
-}
-
-fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader> {
+fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader, ErrorKind<&[u8]>> {
     map(
-        tuple((t_sign_u32, t_checksum, t_entry_count, reserved)),
+        tuple((t_sign_u32, t_u32, t_u32, reserved)),
         |(signature, checksum, entry_count, _)| {
             RTHeader::new(signature, checksum, entry_count as usize)
         },
@@ -118,12 +108,6 @@ impl RTEntry {
         }
     }
 }
-fn t_guid(buffer: &[u8]) -> IResult<&[u8], Uuid> {
-    map(take(16usize), |bytes: &[u8]| {
-        Builder::from_slice_le(bytes).unwrap().into_uuid()
-    })(buffer)
-}
-
 fn t_file_offset(buffer: &[u8]) -> IResult<&[u8], u64> {
     le_u64(buffer)
 }
@@ -136,9 +120,9 @@ fn t_required(buffer: &[u8]) -> IResult<&[u8], bool> {
     map(le_u32, |value: u32| value > 0)(buffer)
 }
 
-fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry> {
+fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry, ErrorKind<&[u8]>> {
     map(
-        tuple((t_guid, t_file_offset, t_length, t_required)),
+        tuple((t_guid, t_u64, t_u32, t_bool_u32)),
         |(guid, file_offset, length, required)| RTEntry::new(guid, file_offset, length, required),
     )(buffer)
 }

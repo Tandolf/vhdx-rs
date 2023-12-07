@@ -10,6 +10,7 @@ use nom::{
 };
 
 use crate::{
+    error::ErrorKind,
     vhdx::{parse_utils::t_sign_u32, signatures::Signature},
     DeSerialise,
 };
@@ -87,7 +88,6 @@ impl<T> DeSerialise<T> for LogEntry {
     }
 }
 
-#[derive(Debug)]
 enum Descriptor {
     Zero {
         // ZeroSignature (4 bytes): MUST be 0x6F72657A ("zero" as ASCII).
@@ -150,7 +150,7 @@ impl<T> DeSerialise<T> for Descriptor {
     }
 }
 
-fn parse_zero(buffer: &[u8]) -> IResult<&[u8], Descriptor> {
+fn parse_zero(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
     map(
         tuple((t_sign_u32, le_u32, le_u64, le_u64, le_u64)),
         |(signature, _, zero_length, file_offset, seq_number)| Descriptor::Zero {
@@ -162,7 +162,7 @@ fn parse_zero(buffer: &[u8]) -> IResult<&[u8], Descriptor> {
     )(buffer)
 }
 
-fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor> {
+fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
     map(
         tuple((t_sign_u32, take(4usize), take(8usize), le_u64, le_u64)),
         |(signature, trailing_bytes, leading_bytes, file_offset, seq_number)| Descriptor::Data {
@@ -174,6 +174,37 @@ fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor> {
             data_sector: None,
         },
     )(buffer)
+}
+
+impl std::fmt::Debug for Descriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Descriptor::Zero {
+                signature,
+                zero_length: _,
+                file_offset,
+                seq_number,
+            } => f
+                .debug_struct("Descriptor")
+                .field("signature", signature)
+                .field("file_offset", file_offset)
+                .field("seq_number", seq_number)
+                .finish(),
+            Descriptor::Data {
+                signature,
+                trailing_bytes: _,
+                leading_bytes: _,
+                file_offset,
+                seq_number,
+                data_sector: _,
+            } => f
+                .debug_struct("Data")
+                .field("signature", signature)
+                .field("file_offset", file_offset)
+                .field("seq_number", seq_number)
+                .finish(),
+        }
+    }
 }
 
 struct DataSector {

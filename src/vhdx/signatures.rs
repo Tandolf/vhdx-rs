@@ -15,7 +15,7 @@ pub const LOGICAL_SECTOR_SIZE: Uuid = uuid!("8141BF1DA96F4709BA47F233A8FAAB5F");
 pub const PHYSICAL_SECTOR_SIZE: Uuid = uuid!("CDA348C7445D44719CC9E9885251C556");
 pub const PARENT_LOCATOR: Uuid = uuid!("A8D35F2DB30B454DABF7D3D84834AB0C");
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum Signature {
     Vhdxfile,
     Head,

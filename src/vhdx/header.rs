@@ -14,7 +14,7 @@ pub const HEADER_TOTAL_SIZE: usize = 1000000;
 pub struct Header {
     fti: FileTypeIdentifier,
     pub header_1: Headers,
-    header_2: Headers,
+    pub header_2: Headers,
     pub rt_1: RTHeader,
     pub rt_2: RTHeader,
 }
@@ -48,7 +48,6 @@ impl<T> DeSerialise<T> for Header {
         let header_2 = Headers::deserialize(reader)?;
         let rt_1 = RTHeader::deserialize(reader)?;
         let rt_2 = RTHeader::deserialize(reader)?;
-        // let (buffer, _) = reserved(buffer).finish().unwrap();
 
         Ok(Header::new(fti, header_1, header_2, rt_1, rt_2))
     }

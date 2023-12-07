@@ -2,16 +2,10 @@ use nom::combinator::peek;
 use uuid::Uuid;
 
 use crate::{
-    vhdx::{
-        bat_utils::{
-            calc_chunk_ratio, calc_payload_blocks_count, calc_sector_bitmap_blocks_count,
-            calc_total_bat_entries_differencing, calc_total_bat_entries_fixed_dynamic,
-        },
-        parse_utils::t_sign_u32,
-        signatures::Signature,
-    },
-    DeSerialise,
+    vhdx::{parse_utils::t_sign_u32, signatures::Signature},
+    Crc32, DeSerialise,
 };
+
 use std::io::{Read, Seek, SeekFrom};
 
 use super::{
@@ -26,6 +20,7 @@ pub struct Vhdx {
     pub header: Header,
     pub log: Log,
     pub meta_data: MetaData,
+    pub bat_table: Vec<BatEntry>,
 }
 
 impl Vhdx {
@@ -37,6 +32,11 @@ impl Vhdx {
 
         // Hardcoded to read the first header
         let h = &header.header_1;
+        let h2 = &header.header_2;
+
+        // Calculating crc-32c for headers
+        let _calc_crc = h.crc32();
+        let _calc_crc2 = h2.crc32();
 
         let _ = reader.seek(SeekFrom::Start(h.log_offset));
         let mut log_entries = Vec::new();
@@ -84,14 +84,15 @@ impl Vhdx {
             .seek(SeekFrom::Start(bat_table_info.file_offset))
             .unwrap();
 
-        let bat_entry = BatEntry::deserialize(reader).unwrap();
-
-        dbg!(bat_entry);
+        let bat_table: Vec<BatEntry> = (0..meta_data.total_bat_entries_fixed_dynamic)
+            .map(|_| BatEntry::deserialize(reader).unwrap())
+            .collect();
 
         Vhdx {
             header,
             log: Log { log_entries },
             meta_data,
+            bat_table,
         }
     }
 }

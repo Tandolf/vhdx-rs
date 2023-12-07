@@ -1,24 +1,30 @@
 use nom::{bits::complete::take, combinator::map, sequence::tuple, IResult};
 
+use crate::error::ErrorKind;
+
 use super::bat_entry::BatEntryState;
 
 pub type BitInput<'a> = (&'a [u8], usize);
 
-pub fn t_3_flags_u32(input: BitInput) -> IResult<BitInput, (bool, bool, bool)> {
+pub fn t_3_flags_u32(
+    input: BitInput,
+) -> IResult<BitInput, (bool, bool, bool), ErrorKind<(&[u8], usize)>> {
     map(
         tuple((take(5usize), t_flag_u8, t_flag_u8, t_flag_u8)),
         |(_, a, b, c): (u8, bool, bool, bool)| (c, b, a),
     )(input)
 }
 
-pub fn t_2_flags_u32(input: BitInput) -> IResult<BitInput, (bool, bool)> {
+pub fn t_2_flags_u32(
+    input: BitInput,
+) -> IResult<BitInput, (bool, bool), ErrorKind<(&[u8], usize)>> {
     map(
         tuple((take(4usize), t_flag_u8, t_flag_u8)),
         |(_, b, a): (u8, bool, bool)| (a, b),
     )(input)
 }
 
-pub fn t_flag_u8(i: BitInput) -> IResult<BitInput, bool> {
+pub fn t_flag_u8(i: BitInput) -> IResult<BitInput, bool, ErrorKind<(&[u8], usize)>> {
     map(take(1usize), |bits: u8| bits > 0)(i)
 }
 

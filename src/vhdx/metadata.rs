@@ -10,7 +10,7 @@ use nom::{
 };
 use uuid::Uuid;
 
-use crate::{vhdx::signatures::PHYSICAL_SECTOR_SIZE, DeSerialise};
+use crate::{error::ErrorKind, vhdx::signatures::PHYSICAL_SECTOR_SIZE, DeSerialise};
 
 use super::{
     bat_utils::{
@@ -192,7 +192,7 @@ fn t_sector_size(buffer: &[u8]) -> IResult<&[u8], SectorSize> {
     })(buffer)
 }
 
-fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16)> {
+fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16), ErrorKind<&[u8]>> {
     map(
         tuple((t_sign_u64, le_u16, le_u16, take(20usize))),
         |(signature, _, entry_count, _)| (signature, entry_count),
@@ -233,7 +233,9 @@ impl Entry {
     }
 }
 
-fn parse_entry(buffer: &[u8]) -> IResult<&[u8], (Uuid, usize, usize, bool, bool, bool)> {
+fn parse_entry(
+    buffer: &[u8],
+) -> IResult<&[u8], (Uuid, usize, usize, bool, bool, bool), ErrorKind<&[u8]>> {
     map(
         tuple((t_guid, le_u32, le_u32, bits(t_3_flags_u32), take(7usize))),
         |(guid, offset, length, (is_user, is_virtual_disk, is_required), _)| {
@@ -249,7 +251,7 @@ fn parse_entry(buffer: &[u8]) -> IResult<&[u8], (Uuid, usize, usize, bool, bool,
     )(buffer)
 }
 
-fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], FileParameters> {
+fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], FileParameters, ErrorKind<&[u8]>> {
     map(
         tuple((le_u32, bits(t_2_flags_u32))),
         |(block_size, (leave_block_allocated, has_parent)): (u32, (bool, bool))| FileParameters {

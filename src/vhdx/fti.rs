@@ -1,6 +1,9 @@
-use super::{parse_utils::t_sign_u64, signatures::Signature};
+use super::{
+    parse_utils::{t_creator, t_sign_u64},
+    signatures::Signature,
+};
 use crate::DeSerialise;
-use nom::{bytes::complete::take, combinator::map, sequence::tuple, IResult};
+use nom::{combinator::map, sequence::tuple};
 use std::io::{Read, Seek};
 
 const FTI_SIZE: usize = 65536;
@@ -15,20 +18,6 @@ impl FileTypeIdentifier {
     fn new(signature: Signature, creator: String) -> FileTypeIdentifier {
         Self { signature, creator }
     }
-}
-
-fn t_creator(buffer: &[u8]) -> IResult<&[u8], String> {
-    map(take(512usize), |bytes: &[u8]| {
-        let bytes: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|b: &[u8]| ((b[1] as u16) << 8) | (b[0] as u16))
-            .collect();
-        String::from_utf16(&bytes)
-            // Handle utf error
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .to_string()
-    })(buffer)
 }
 
 impl<T> DeSerialise<T> for FileTypeIdentifier {

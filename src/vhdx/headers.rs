@@ -1,15 +1,11 @@
 #![allow(dead_code)]
 use super::{
-    parse_utils::{t_guid, t_sign_u32},
-    signatures::Signature,
+    parse_utils::{t_guid, t_sign_u32, t_u16, t_u32, t_u64},
+    signatures::{Signature, HEAD_SIGN},
 };
-use crate::DeSerialise;
-use nom::{
-    combinator::map,
-    number::complete::{le_u16, le_u32, le_u64},
-    sequence::tuple,
-    Finish, IResult,
-};
+use crate::{error::ErrorKind, Crc32, DeSerialise};
+use crc::{Crc, CRC_32_ISCSI};
+use nom::{combinator::map, sequence::tuple, Finish, IResult};
 use std::io::{Read, Seek};
 use uuid::Uuid;
 
@@ -20,7 +16,7 @@ const HEADER_SIZE: usize = 65536;
 // two headers is a 4-KB structure that is aligned to a 64-KB boundary.<1> One header is stored at
 // offset 64 KB and the other at 128 KB. Only one header is considered current and in use at any
 // point in time.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Headers {
     // MUST be 0x68656164 which is a UTF-8 string representing "head".
     signature: Signature,
@@ -78,6 +74,7 @@ pub struct Headers {
     // value MUST be a multiple of 1MB. The log MUST NOT overlap any other structures.
     pub log_offset: u64,
 }
+
 impl Headers {
     fn new(
         signature: Signature,
@@ -106,43 +103,30 @@ impl Headers {
     }
 }
 
-fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
+impl Crc32 for Headers {
+    fn crc32(&self) -> u32 {
+        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+        let mut hasher = crc.digest();
+
+        hasher.update(HEAD_SIGN);
+        hasher.update(&[0; 4]);
+        hasher.update(&self.seq_number.to_le_bytes());
+        hasher.update(&self.file_write_guid.to_bytes_le());
+        hasher.update(&self.data_write_guid.to_bytes_le());
+        hasher.update(&self.log_guid.to_bytes_le());
+        hasher.update(&self.log_version.to_le_bytes());
+        hasher.update(&self.version.to_le_bytes());
+        hasher.update(&self.log_length.to_le_bytes());
+        hasher.update(&self.log_offset.to_le_bytes());
+        hasher.update(&[0; 4016]);
+        hasher.finalize()
+    }
 }
 
-fn t_seq(buffer: &[u8]) -> IResult<&[u8], u64> {
-    le_u64(buffer)
-}
-
-fn t_log_version(buffer: &[u8]) -> IResult<&[u8], u16> {
-    le_u16(buffer)
-}
-
-fn t_version(buffer: &[u8]) -> IResult<&[u8], u16> {
-    le_u16(buffer)
-}
-
-fn t_log_length(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
-}
-
-fn t_log_offset(buffer: &[u8]) -> IResult<&[u8], u64> {
-    le_u64(buffer)
-}
-
-fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers> {
+fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers, ErrorKind<&[u8]>> {
     map(
         tuple((
-            t_sign_u32,
-            t_checksum,
-            t_seq,
-            t_guid,
-            t_guid,
-            t_guid,
-            t_log_version,
-            t_version,
-            t_log_length,
-            t_log_offset,
+            t_sign_u32, t_u32, t_u64, t_guid, t_guid, t_guid, t_u16, t_u16, t_u32, t_u64,
         )),
         |(
             signature,

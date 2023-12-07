@@ -1,5 +1,8 @@
 use std::io::{Read, Seek};
 
+use error::ErrorKind;
+use nom::IResult;
+
 pub mod error;
 pub mod vhdx;
 
@@ -9,6 +12,10 @@ pub trait DeSerialise<T> {
     fn deserialize(fs: &mut T) -> anyhow::Result<Self::Item>
     where
         T: Read + Seek;
+}
+
+pub trait Crc32 {
+    fn crc32(&self) -> u32;
 }
 
 #[cfg(test)]
