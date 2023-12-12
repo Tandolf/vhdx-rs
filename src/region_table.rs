@@ -8,12 +8,12 @@ use uuid::Uuid;
 
 use crate::{
     error::{VhdxError, VhdxParseError},
-    DeSerialise,
+    DeSerialise, Signature,
 };
 
 use super::{
     parse_utils::{t_bool_u32, t_guid, t_sign_u32, t_u32, t_u64},
-    signatures::{Signature, BAT_ENTRY, META_DATA_ENTRY},
+    signatures::{BAT_ENTRY, META_DATA_ENTRY},
 };
 
 const HEADER_SIZE: usize = 16;

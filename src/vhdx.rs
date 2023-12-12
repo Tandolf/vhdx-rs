@@ -1,24 +1,19 @@
-use crate::error::{Result, VhdxError};
-use nom::combinator::peek;
-
+use crate::bat::BatEntry;
+use crate::DeSerialise;
 use crate::{
-    vhdx::{parse_utils::t_sign_u32, signatures::Signature},
-    Crc32, DeSerialise,
+    error::{Result, VhdxError},
+    log::{Log, LogEntry},
+    meta_data::MetaData,
+    parse_utils::t_sign_u32,
+    vhdx_header::{KnowRegion, MainHeader},
+    Crc32, Signature,
 };
-
+use nom::combinator::peek;
 use std::io::{Read, Seek, SeekFrom};
-
-use super::{
-    bat_entry::BatEntry,
-    header::Header,
-    log::{log::Log, log_entry::LogEntry},
-    metadata::MetaData,
-    region_table::KnowRegion,
-};
 
 #[derive(Debug)]
 pub struct Vhdx {
-    pub header: Header,
+    pub header: MainHeader,
     pub log: Log,
     pub meta_data: MetaData,
     pub bat_table: Vec<BatEntry>,
@@ -29,7 +24,7 @@ impl Vhdx {
     where
         T: Read + Seek,
     {
-        let header = Header::deserialize(reader)?;
+        let header = MainHeader::deserialize(reader)?;
 
         // Hardcoded to read the first header
         let h = &header.header_1;
@@ -62,12 +57,14 @@ impl Vhdx {
             }
         }
 
-        let meta_data_info = &header.rt_1.table_entries[&KnowRegion::MetaData];
-        let bat_table_info = &header.rt_1.table_entries[&KnowRegion::Bat];
+        let meta_data_info = &header.region_table_1.table_entries[&KnowRegion::MetaData];
+        let bat_table_info = &header.region_table_1.table_entries[&KnowRegion::Bat];
 
+        // Read MetaData
         reader.seek(SeekFrom::Start(meta_data_info.file_offset))?;
         let meta_data = MetaData::deserialize(reader).unwrap();
 
+        // Read BAT Table
         reader.seek(SeekFrom::Start(bat_table_info.file_offset))?;
         let bat_table: Vec<BatEntry> = (0..meta_data.total_bat_entries_fixed_dynamic)
             .map(|_| BatEntry::deserialize(reader).unwrap())

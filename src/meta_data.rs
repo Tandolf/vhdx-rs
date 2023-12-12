@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io::SeekFrom};
 
+use super::Signature;
 use nom::{
     bits,
     bytes::complete::take,
@@ -11,21 +12,19 @@ use nom::{
 use uuid::Uuid;
 
 use crate::{
+    bat::{
+        calc_chunk_ratio, calc_payload_blocks_count, calc_sector_bitmap_blocks_count,
+        calc_total_bat_entries_differencing, calc_total_bat_entries_fixed_dynamic,
+    },
     error::{VhdxError, VhdxParseError},
-    vhdx::signatures::PHYSICAL_SECTOR_SIZE,
+    signatures::PHYSICAL_SECTOR_SIZE,
     DeSerialise,
 };
 
 use super::{
-    bat_utils::{
-        calc_chunk_ratio, calc_payload_blocks_count, calc_sector_bitmap_blocks_count,
-        calc_total_bat_entries_differencing, calc_total_bat_entries_fixed_dynamic,
-    },
     bits_parsers::{t_2_flags_u32, t_3_flags_u32},
     parse_utils::{t_guid, t_sign_u64},
-    signatures::{
-        Signature, FILE_PARAMETERS, LOGICAL_SECTOR_SIZE, VIRTUAL_DISK_ID, VIRTUAL_DISK_SIZE,
-    },
+    signatures::{FILE_PARAMETERS, LOGICAL_SECTOR_SIZE, VIRTUAL_DISK_ID, VIRTUAL_DISK_SIZE},
 };
 
 #[allow(dead_code)]
@@ -266,24 +265,6 @@ fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], FileParameters, VhdxParseE
             has_parent,
         },
     )(buffer)
-}
-
-#[derive(Debug)]
-pub enum MDKnownEntries {
-    FileParameters {
-        block_size: usize,
-        leave_block_allocated: bool,
-        has_parent: bool,
-    },
-    VirtualDiskSize(u64),
-    VirtualDiskID(Uuid),
-    LogicalSectorSize(SectorSize),
-    PhysicalSectorSize(SectorSize),
-    ParentLocatorHeader {
-        locator_type: Uuid,
-        key_value_count: u8,
-        entries: HashMap<String, LocatorTypeEntry>,
-    },
 }
 
 #[derive(Debug, Clone, Copy)]

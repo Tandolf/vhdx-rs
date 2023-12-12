@@ -19,19 +19,6 @@ pub const PARENT_LOCATOR: Uuid = uuid!("A8D35F2DB30B454DABF7D3D84834AB0C");
 pub const BAT_ENTRY: Uuid = uuid!("2DC27766F62342009D64115E9BFD4A08");
 pub const META_DATA_ENTRY: Uuid = uuid!("8B7CA20647904B9AB8FE575F050F886E");
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum Signature {
-    Vhdxfile,
-    Head,
-    Regi,
-    Loge,
-    Zero,
-    Data,
-    Desc,
-    MetaData,
-    Unknown,
-}
-
 pub enum MDKnownItems {
     FileParamaters,
     VirtualDiskSize,

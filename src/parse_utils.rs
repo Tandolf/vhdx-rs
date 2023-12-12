@@ -1,9 +1,11 @@
-use crate::error::VhdxParseError;
-
-use super::signatures::{
-    Signature, DATA_SIGN, DESC_SIGN, FTI_SIGN, HEAD_SIGN, LOGE_SIGN, META_DATA_SIGN, RGT_SIGN,
-    ZERO_SIGN,
+use crate::{
+    error::VhdxParseError,
+    signatures::{
+        DATA_SIGN, DESC_SIGN, FTI_SIGN, HEAD_SIGN, LOGE_SIGN, META_DATA_SIGN, RGT_SIGN, ZERO_SIGN,
+    },
+    Signature,
 };
+
 use nom::{
     bytes::complete::take,
     combinator::{map, map_res},
