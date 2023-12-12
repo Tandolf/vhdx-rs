@@ -6,11 +6,11 @@ use nom::{
     combinator::{map, peek},
     number::complete::{le_u32, le_u64},
     sequence::tuple,
-    IResult,
+    Finish,
 };
 
 use crate::{
-    error::ErrorKind,
+    error::{VhdxError, VhdxParseError},
     vhdx::{parse_utils::t_sign_u32, signatures::Signature},
     DeSerialise,
 };
@@ -39,7 +39,7 @@ impl LogEntry {
 impl<T> DeSerialise<T> for LogEntry {
     type Item = LogEntry;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
@@ -133,24 +133,25 @@ enum Descriptor {
 impl<T> DeSerialise<T> for Descriptor {
     type Item = Descriptor;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
         let mut buffer = [0; 32];
         reader.read_exact(&mut buffer)?;
         let mut peeker = peek(t_sign_u32);
-        let (buffer, signature) = peeker(&buffer).unwrap();
+        let (buffer, signature) = peeker(&buffer)?;
         let (_, descriptor) = match signature {
-            Signature::Desc => parse_desc(buffer).unwrap(),
-            Signature::Zero => parse_zero(buffer).unwrap(),
-            _ => panic!("Unknown file format, expected Data/Zero descriptor"),
+            Signature::Desc => parse_desc(buffer)?,
+            Signature::Zero => parse_zero(buffer)?,
+            _ => Err(VhdxParseError::UnknownSignature)?,
         };
+
         Ok(descriptor)
     }
 }
 
-fn parse_zero(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
+fn parse_zero(buffer: &[u8]) -> Result<(&[u8], Descriptor), VhdxParseError<&[u8]>> {
     map(
         tuple((t_sign_u32, le_u32, le_u64, le_u64, le_u64)),
         |(signature, _, zero_length, file_offset, seq_number)| Descriptor::Zero {
@@ -160,9 +161,10 @@ fn parse_zero(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
             seq_number,
         },
     )(buffer)
+    .finish()
 }
 
-fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
+fn parse_desc(buffer: &[u8]) -> Result<(&[u8], Descriptor), VhdxParseError<&[u8]>> {
     map(
         tuple((t_sign_u32, take(4usize), take(8usize), le_u64, le_u64)),
         |(signature, trailing_bytes, leading_bytes, file_offset, seq_number)| Descriptor::Data {
@@ -174,6 +176,7 @@ fn parse_desc(buffer: &[u8]) -> IResult<&[u8], Descriptor, ErrorKind<&[u8]>> {
             data_sector: None,
         },
     )(buffer)
+    .finish()
 }
 
 impl std::fmt::Debug for Descriptor {
@@ -238,7 +241,7 @@ impl DataSector {
 impl<T> DeSerialise<T> for DataSector {
     type Item = DataSector;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
@@ -249,8 +252,7 @@ impl<T> DeSerialise<T> for DataSector {
             |(signature, sequence_high, data, sequence_low)| {
                 DataSector::new(signature, sequence_high, data, sequence_low)
             },
-        )(&buffer)
-        .unwrap();
+        )(&buffer)?;
 
         Ok(data_sector)
     }

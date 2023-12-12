@@ -9,7 +9,10 @@ use nom::{
 };
 use uuid::{Builder, Uuid};
 
-use crate::DeSerialise;
+use crate::{
+    error::{VhdxError, VhdxParseError},
+    DeSerialise,
+};
 
 #[derive(Debug)]
 pub struct Header {
@@ -114,7 +117,7 @@ fn t_guid(buffer: &[u8]) -> IResult<&[u8], Uuid> {
 impl<T> DeSerialise<T> for Header {
     type Item = Header;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
@@ -160,7 +163,7 @@ impl<T> DeSerialise<T> for Header {
             },
         )(&buffer)
         .finish()
-        .unwrap();
+        .map_err(VhdxParseError::Nom)?;
         Ok(header)
     }
 }

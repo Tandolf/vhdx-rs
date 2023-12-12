@@ -3,6 +3,7 @@ use std::io::{Read, Seek};
 
 use nom::{bytes::complete::take, IResult};
 
+use crate::error::{Result, VhdxError};
 use crate::DeSerialise;
 
 use super::{fti::FileTypeIdentifier, headers::Headers, region_table::RTHeader};
@@ -39,7 +40,7 @@ impl Header {
 impl<T> DeSerialise<T> for Header {
     type Item = Header;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {

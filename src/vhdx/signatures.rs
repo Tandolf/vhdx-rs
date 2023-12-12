@@ -8,12 +8,16 @@ pub const DATA_SIGN: &[u8] = &[0x64, 0x61, 0x74, 0x61];
 pub const LOGE_SIGN: &[u8] = &[0x6C, 0x6F, 0x67, 0x65];
 pub const ZERO_SIGN: &[u8] = &[0x6F, 0x72, 0x65, 0x7A];
 pub const META_DATA_SIGN: &[u8] = &[0x6D, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61];
+
 pub const FILE_PARAMETERS: Uuid = uuid!("CAA16737FA364D43B3B633F0AA44E76B");
 pub const VIRTUAL_DISK_SIZE: Uuid = uuid!("2FA54224CD1B4876B2115DBED83BF4B8");
 pub const VIRTUAL_DISK_ID: Uuid = uuid!("BECA12ABB2E6452393EFC309E000C746");
 pub const LOGICAL_SECTOR_SIZE: Uuid = uuid!("8141BF1DA96F4709BA47F233A8FAAB5F");
 pub const PHYSICAL_SECTOR_SIZE: Uuid = uuid!("CDA348C7445D44719CC9E9885251C556");
 pub const PARENT_LOCATOR: Uuid = uuid!("A8D35F2DB30B454DABF7D3D84834AB0C");
+
+pub const BAT_ENTRY: Uuid = uuid!("2DC27766F62342009D64115E9BFD4A08");
+pub const META_DATA_ENTRY: Uuid = uuid!("8B7CA20647904B9AB8FE575F050F886E");
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum Signature {

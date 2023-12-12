@@ -1,10 +1,7 @@
-use nom::{bits, error::Error, sequence::tuple, IResult};
-
-use crate::DeSerialise;
-
-use super::bits_parsers::{t_file_offset, t_reserved, t_state, BitInput};
+use crate::{error::VhdxError, DeSerialise};
 use bitvec::prelude::*;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct BatEntry {
     state: BatEntryState,
@@ -39,7 +36,7 @@ pub fn t_entry(input: &[u8]) -> (BatEntryState, usize) {
 impl<T> DeSerialise<T> for BatEntry {
     type Item = BatEntry;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: std::io::Read + std::io::Seek,
     {

@@ -1,7 +1,6 @@
 use std::io::{Read, Seek};
 
-use error::ErrorKind;
-use nom::IResult;
+use error::VhdxError;
 
 pub mod error;
 pub mod vhdx;
@@ -9,7 +8,7 @@ pub mod vhdx;
 pub trait DeSerialise<T> {
     type Item;
 
-    fn deserialize(fs: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(fs: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek;
 }

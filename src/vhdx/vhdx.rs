@@ -1,5 +1,5 @@
+use crate::error::{Result, VhdxError};
 use nom::combinator::peek;
-use uuid::Uuid;
 
 use crate::{
     vhdx::{parse_utils::t_sign_u32, signatures::Signature},
@@ -13,6 +13,7 @@ use super::{
     header::Header,
     log::{log::Log, log_entry::LogEntry},
     metadata::MetaData,
+    region_table::KnowRegion,
 };
 
 #[derive(Debug)]
@@ -24,11 +25,11 @@ pub struct Vhdx {
 }
 
 impl Vhdx {
-    pub fn new<T>(reader: &mut T) -> Self
+    pub fn new<T>(reader: &mut T) -> Result<Self, VhdxError>
     where
         T: Read + Seek,
     {
-        let header = Header::deserialize(reader).unwrap();
+        let header = Header::deserialize(reader)?;
 
         // Hardcoded to read the first header
         let h = &header.header_1;
@@ -41,58 +42,42 @@ impl Vhdx {
         let _ = reader.seek(SeekFrom::Start(h.log_offset));
         let mut log_entries = Vec::new();
         let log_end = h.log_offset + h.log_length as u64;
-        while reader.stream_position().unwrap() != log_end {
-            let log_entry = LogEntry::deserialize(reader).unwrap();
+
+        while reader.stream_position()? != log_end {
+            let log_entry = LogEntry::deserialize(reader)?;
             log_entries.push(log_entry);
 
             // peeking to see if there are any more logs
             let mut buffer = [0; 4];
-            reader.read_exact(&mut buffer).unwrap();
+            reader.read_exact(&mut buffer)?;
             let mut peeker = peek(t_sign_u32);
-            let (_, signature) = peeker(&buffer).unwrap();
+            let (_, signature) = peeker(&buffer)?;
             match signature {
                 //if there are logs we back up and let the loop run again
                 Signature::Loge => {
-                    reader.seek(SeekFrom::Current(-4)).unwrap();
+                    reader.seek(SeekFrom::Current(-4))?;
                 }
                 // Otherwise that was last entry we break
                 _ => break,
             }
         }
 
-        let meta_data_info = header
-            .rt_1
-            .table_entries
-            .iter()
-            .find(|v| v.guid == Uuid::parse_str("8B7CA20647904B9AB8FE575F050F886E").unwrap())
-            .unwrap();
+        let meta_data_info = &header.rt_1.table_entries[&KnowRegion::MetaData];
+        let bat_table_info = &header.rt_1.table_entries[&KnowRegion::Bat];
 
-        let bat_table_info = header
-            .rt_1
-            .table_entries
-            .iter()
-            .find(|v| v.guid == Uuid::parse_str("2DC27766F62342009D64115E9BFD4A08").unwrap())
-            .unwrap();
-
-        reader
-            .seek(SeekFrom::Start(meta_data_info.file_offset))
-            .unwrap();
-
+        reader.seek(SeekFrom::Start(meta_data_info.file_offset))?;
         let meta_data = MetaData::deserialize(reader).unwrap();
 
-        reader
-            .seek(SeekFrom::Start(bat_table_info.file_offset))
-            .unwrap();
-
+        reader.seek(SeekFrom::Start(bat_table_info.file_offset))?;
         let bat_table: Vec<BatEntry> = (0..meta_data.total_bat_entries_fixed_dynamic)
             .map(|_| BatEntry::deserialize(reader).unwrap())
             .collect();
 
-        Vhdx {
+        Ok(Vhdx {
             header,
             log: Log { log_entries },
             meta_data,
             bat_table,
-        }
+        })
     }
 }

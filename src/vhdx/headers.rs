@@ -3,7 +3,10 @@ use super::{
     parse_utils::{t_guid, t_sign_u32, t_u16, t_u32, t_u64},
     signatures::{Signature, HEAD_SIGN},
 };
-use crate::{error::ErrorKind, Crc32, DeSerialise};
+use crate::{
+    error::{VhdxError, VhdxParseError},
+    Crc32, DeSerialise,
+};
 use crc::{Crc, CRC_32_ISCSI};
 use nom::{combinator::map, sequence::tuple, Finish, IResult};
 use std::io::{Read, Seek};
@@ -123,7 +126,7 @@ impl Crc32 for Headers {
     }
 }
 
-fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers, ErrorKind<&[u8]>> {
+fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers, VhdxParseError<&[u8]>> {
     map(
         tuple((
             t_sign_u32, t_u32, t_u64, t_guid, t_guid, t_guid, t_u16, t_u16, t_u32, t_u64,
@@ -159,7 +162,7 @@ fn parse_headers(buffer: &[u8]) -> IResult<&[u8], Headers, ErrorKind<&[u8]>> {
 impl<T> DeSerialise<T> for Headers {
     type Item = Headers;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {

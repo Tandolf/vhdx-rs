@@ -10,7 +10,11 @@ use nom::{
 };
 use uuid::Uuid;
 
-use crate::{error::ErrorKind, vhdx::signatures::PHYSICAL_SECTOR_SIZE, DeSerialise};
+use crate::{
+    error::{VhdxError, VhdxParseError},
+    vhdx::signatures::PHYSICAL_SECTOR_SIZE,
+    DeSerialise,
+};
 
 use super::{
     bat_utils::{
@@ -24,6 +28,7 @@ use super::{
     },
 };
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MetaData {
     // Signature (8 bytes): MUST be 0x617461646174656D ("metadata" as ASCII).
@@ -45,6 +50,7 @@ pub struct MetaData {
     pub total_bat_entries_differencing: u64,
     pub(crate) entries: HashMap<Uuid, Entry>,
 }
+
 impl MetaData {
     fn new(
         signature: Signature,
@@ -82,7 +88,7 @@ impl MetaData {
 impl<T> DeSerialise<T> for MetaData {
     type Item = MetaData;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: std::io::Read + std::io::Seek,
     {
@@ -192,7 +198,7 @@ fn t_sector_size(buffer: &[u8]) -> IResult<&[u8], SectorSize> {
     })(buffer)
 }
 
-fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16), ErrorKind<&[u8]>> {
+fn parse_header(reader: &[u8]) -> IResult<&[u8], (Signature, u16), VhdxParseError<&[u8]>> {
     map(
         tuple((t_sign_u64, le_u16, le_u16, take(20usize))),
         |(signature, _, entry_count, _)| (signature, entry_count),
@@ -235,7 +241,7 @@ impl Entry {
 
 fn parse_entry(
     buffer: &[u8],
-) -> IResult<&[u8], (Uuid, usize, usize, bool, bool, bool), ErrorKind<&[u8]>> {
+) -> IResult<&[u8], (Uuid, usize, usize, bool, bool, bool), VhdxParseError<&[u8]>> {
     map(
         tuple((t_guid, le_u32, le_u32, bits(t_3_flags_u32), take(7usize))),
         |(guid, offset, length, (is_user, is_virtual_disk, is_required), _)| {
@@ -251,7 +257,7 @@ fn parse_entry(
     )(buffer)
 }
 
-fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], FileParameters, ErrorKind<&[u8]>> {
+fn parse_file_params(buffer: &[u8]) -> IResult<&[u8], FileParameters, VhdxParseError<&[u8]>> {
     map(
         tuple((le_u32, bits(t_2_flags_u32))),
         |(block_size, (leave_block_allocated, has_parent)): (u32, (bool, bool))| FileParameters {

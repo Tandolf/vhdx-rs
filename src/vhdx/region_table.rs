@@ -1,19 +1,19 @@
-use std::io::{Read, Seek, SeekFrom};
-
-use nom::{
-    bytes::complete::take,
-    combinator::map,
-    number::complete::{le_u32, le_u64},
-    sequence::tuple,
-    Finish, IResult,
+use std::{
+    collections::HashMap,
+    io::{Read, Seek, SeekFrom},
 };
+
+use nom::{bytes::complete::take, combinator::map, sequence::tuple, Finish, IResult};
 use uuid::Uuid;
 
-use crate::{error::ErrorKind, DeSerialise};
+use crate::{
+    error::{VhdxError, VhdxParseError},
+    DeSerialise,
+};
 
 use super::{
     parse_utils::{t_bool_u32, t_guid, t_sign_u32, t_u32, t_u64},
-    signatures::Signature,
+    signatures::{Signature, BAT_ENTRY, META_DATA_ENTRY},
 };
 
 const HEADER_SIZE: usize = 16;
@@ -24,6 +24,7 @@ const RT_HEADER_SIZE: usize = 65536;
 // the identity and location of regions within the file. There are two copies of the region table,
 // stored at file offset 192 KB and file offset 256 KB. Updates to the region table structures must
 // be made through the log.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RTHeader {
     // MUST be 0x72656769, which is a UTF-8 string representing "regi".
@@ -33,7 +34,7 @@ pub struct RTHeader {
     checksum: u32,
     entry_count: usize,
 
-    pub table_entries: Vec<RTEntry>,
+    pub table_entries: HashMap<KnowRegion, RTEntry>,
 }
 impl RTHeader {
     fn new(signature: Signature, checksum: u32, entry_count: usize) -> Self {
@@ -41,16 +42,16 @@ impl RTHeader {
             signature,
             checksum,
             entry_count,
-            table_entries: Vec::with_capacity(entry_count),
+            table_entries: HashMap::with_capacity(entry_count),
         }
     }
 }
 
-fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8], ErrorKind<&[u8]>> {
+fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8], VhdxParseError<&[u8]>> {
     take(4usize)(buffer)
 }
 
-fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader, ErrorKind<&[u8]>> {
+fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader, VhdxParseError<&[u8]>> {
     map(
         tuple((t_sign_u32, t_u32, t_u32, reserved)),
         |(signature, checksum, entry_count, _)| {
@@ -62,18 +63,22 @@ fn parse_header(buffer: &[u8]) -> IResult<&[u8], RTHeader, ErrorKind<&[u8]>> {
 impl<T> DeSerialise<T> for RTHeader {
     type Item = RTHeader;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
         let mut buffer = [0; HEADER_SIZE];
         reader.read_exact(&mut buffer)?;
-        let (_, mut header) = parse_header(&buffer).finish().unwrap();
-        let mut entry;
+        let (_, mut header) = parse_header(&buffer).finish()?;
         let mut offset = RT_HEADER_SIZE - HEADER_SIZE;
         for _ in 0..header.entry_count {
-            entry = RTEntry::deserialize(reader)?;
-            header.table_entries.push(entry);
+            let entry = RTEntry::deserialize(reader)?;
+            let known_region = match entry.guid {
+                BAT_ENTRY => Ok(KnowRegion::Bat),
+                META_DATA_ENTRY => Ok(KnowRegion::MetaData),
+                _ => Err(VhdxError::UnknownRTEntryFound(entry.guid.to_string())),
+            }?;
+            header.table_entries.insert(known_region, entry);
             offset -= ENTRY_SIZE;
         }
 
@@ -83,6 +88,7 @@ impl<T> DeSerialise<T> for RTHeader {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RTEntry {
     // Guid (16 bytes): Specifies a 128-bit identifier for the object (a GUID in binary form) and
@@ -108,19 +114,8 @@ impl RTEntry {
         }
     }
 }
-fn t_file_offset(buffer: &[u8]) -> IResult<&[u8], u64> {
-    le_u64(buffer)
-}
 
-fn t_length(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
-}
-
-fn t_required(buffer: &[u8]) -> IResult<&[u8], bool> {
-    map(le_u32, |value: u32| value > 0)(buffer)
-}
-
-fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry, ErrorKind<&[u8]>> {
+fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry, VhdxParseError<&[u8]>> {
     map(
         tuple((t_guid, t_u64, t_u32, t_bool_u32)),
         |(guid, file_offset, length, required)| RTEntry::new(guid, file_offset, length, required),
@@ -130,16 +125,22 @@ fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry, ErrorKind<&[u8]>> {
 impl<T> DeSerialise<T> for RTEntry {
     type Item = RTEntry;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
         let mut buffer = [0; 32];
 
         reader.read_exact(&mut buffer)?;
-        let (_, entry) = parse_entry(&buffer).finish().unwrap();
+        let (_, entry) = parse_entry(&buffer).finish()?;
         Ok(entry)
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum KnowRegion {
+    Bat,
+    MetaData,
 }
 
 #[cfg(test)]
@@ -166,8 +167,6 @@ mod tests {
         let mut values = Cursor::new(values);
 
         let rth = RTHeader::deserialize(&mut values).unwrap();
-
-        dbg!(&rth);
 
         assert_eq!(Signature::Regi, rth.signature);
     }

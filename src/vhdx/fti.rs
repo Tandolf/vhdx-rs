@@ -2,8 +2,9 @@ use super::{
     parse_utils::{t_creator, t_sign_u64},
     signatures::Signature,
 };
+use crate::error::VhdxError;
 use crate::DeSerialise;
-use nom::{combinator::map, sequence::tuple};
+use nom::{combinator::map, sequence::tuple, Finish};
 use std::io::{Read, Seek};
 
 const FTI_SIZE: usize = 65536;
@@ -23,7 +24,7 @@ impl FileTypeIdentifier {
 impl<T> DeSerialise<T> for FileTypeIdentifier {
     type Item = FileTypeIdentifier;
 
-    fn deserialize(reader: &mut T) -> anyhow::Result<Self::Item>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
@@ -33,7 +34,7 @@ impl<T> DeSerialise<T> for FileTypeIdentifier {
         let (_, fti) = map(tuple((t_sign_u64, t_creator)), |(signature, creator)| {
             FileTypeIdentifier::new(signature, creator)
         })(&buffer)
-        .unwrap();
+        .finish()?;
         Ok(fti)
     }
 }
