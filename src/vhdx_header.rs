@@ -6,13 +6,13 @@ use nom::bytes::complete::take;
 use nom::combinator::map;
 use nom::sequence::tuple;
 use nom::IResult;
+use uuid::uuid;
 use uuid::Uuid;
 
 use crate::error::{Result, VhdxError, VhdxParseError};
 use crate::parse_utils::{
     t_bool_u32, t_creator, t_guid, t_sign_u32, t_sign_u64, t_u16, t_u32, t_u64,
 };
-use crate::signatures::{BAT_ENTRY, META_DATA_ENTRY};
 use crate::{Crc32, DeSerialise, Signature};
 
 pub const SECTION_SIZE: usize = 64000;
@@ -70,6 +70,7 @@ pub struct FileTypeIdentifier {
 }
 
 impl FileTypeIdentifier {
+    pub const SIGN: &'static [u8] = &[0x76, 0x68, 0x64, 0x78, 0x66, 0x69, 0x6C, 0x65];
     const SIZE: usize = 65536;
 
     fn new(signature: Signature, creator: String) -> FileTypeIdentifier {
@@ -161,7 +162,7 @@ pub struct Header {
 
 impl Header {
     const SIZE: usize = 65536;
-    const SIGN: &'static [u8] = &[0x68, 0x65, 0x61, 0x64];
+    pub const SIGN: &'static [u8] = &[0x68, 0x65, 0x61, 0x64];
     fn new(
         signature: Signature,
         checksum: u32,
@@ -277,6 +278,10 @@ impl RegionTable {
     const HEADER_SIZE: usize = 16;
     const ENTRY_SIZE: usize = 32;
     const RT_HEADER_SIZE: usize = 65536;
+    pub const SIGN: &'static [u8] = &[0x72, 0x65, 0x67, 0x69];
+
+    const BAT_ENTRY: Uuid = uuid!("2DC27766F62342009D64115E9BFD4A08");
+    const META_DATA_ENTRY: Uuid = uuid!("8B7CA20647904B9AB8FE575F050F886E");
 
     fn new(signature: Signature, checksum: u32, entry_count: usize) -> Self {
         Self {
@@ -315,8 +320,8 @@ impl<T> DeSerialise<T> for RegionTable {
         for _ in 0..header.entry_count {
             let entry = RTEntry::deserialize(reader)?;
             let known_region = match entry.guid {
-                BAT_ENTRY => Ok(KnowRegion::Bat),
-                META_DATA_ENTRY => Ok(KnowRegion::MetaData),
+                RegionTable::BAT_ENTRY => Ok(KnowRegion::Bat),
+                RegionTable::META_DATA_ENTRY => Ok(KnowRegion::MetaData),
                 _ => Err(VhdxError::UnknownRTEntryFound(entry.guid.to_string())),
             }?;
             header.table_entries.insert(known_region, entry);

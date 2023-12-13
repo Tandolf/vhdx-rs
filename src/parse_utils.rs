@@ -1,8 +1,8 @@
 use crate::{
     error::VhdxParseError,
-    signatures::{
-        DATA_SIGN, DESC_SIGN, FTI_SIGN, HEAD_SIGN, LOGE_SIGN, META_DATA_SIGN, RGT_SIGN, ZERO_SIGN,
-    },
+    log::{Descriptor, LogHeader},
+    meta_data::MetaData,
+    vhdx_header::{FileTypeIdentifier, Header, RegionTable},
     Signature,
 };
 
@@ -16,20 +16,20 @@ use uuid::{Builder, Uuid};
 
 pub fn t_sign_u64(buffer: &[u8]) -> IResult<&[u8], Signature, VhdxParseError<&[u8]>> {
     map(take(8usize), |bytes: &[u8]| match bytes {
-        FTI_SIGN => Signature::Vhdxfile,
-        META_DATA_SIGN => Signature::MetaData,
+        FileTypeIdentifier::SIGN => Signature::Vhdxfile,
+        MetaData::SIGN => Signature::MetaData,
         _ => Signature::Unknown,
     })(buffer)
 }
 
 pub fn t_sign_u32(buffer: &[u8]) -> IResult<&[u8], Signature, VhdxParseError<&[u8]>> {
     map(take(4usize), |bytes: &[u8]| match bytes {
-        HEAD_SIGN => Signature::Head,
-        RGT_SIGN => Signature::Regi,
-        DESC_SIGN => Signature::Desc,
-        ZERO_SIGN => Signature::Zero,
-        DATA_SIGN => Signature::Data,
-        LOGE_SIGN => Signature::Loge,
+        Header::SIGN => Signature::Head,
+        RegionTable::SIGN => Signature::Regi,
+        Descriptor::SIGN => Signature::Desc,
+        Descriptor::ZERO_SIGN => Signature::Zero,
+        Descriptor::DATA_SIGN => Signature::Data,
+        LogHeader::SIGN => Signature::Loge,
         _ => Signature::Unknown,
     })(buffer)
 }

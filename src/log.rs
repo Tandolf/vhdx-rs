@@ -144,6 +144,7 @@ pub struct LogHeader {
     pub last_file_offset: u64,
 }
 impl LogHeader {
+    pub const SIGN: &'static [u8] = &[0x6C, 0x6F, 0x67, 0x65];
     fn new(
         signature: Signature,
         checksum: u32,
@@ -214,7 +215,7 @@ impl<T> DeSerialise<T> for LogHeader {
 }
 
 #[allow(dead_code)]
-enum Descriptor {
+pub(crate) enum Descriptor {
     Zero {
         // ZeroSignature (4 bytes): MUST be 0x6F72657A ("zero" as ASCII).
         signature: Signature,
@@ -254,6 +255,12 @@ enum Descriptor {
         // Data sector belonging to this descriptor
         data_sector: Option<DataSector>,
     },
+}
+
+impl Descriptor {
+    pub const SIGN: &'static [u8] = &[0x64, 0x65, 0x73, 0x63];
+    pub const ZERO_SIGN: &'static [u8] = &[0x6F, 0x72, 0x65, 0x7A];
+    pub const DATA_SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
 }
 
 impl<T> DeSerialise<T> for Descriptor {
@@ -337,7 +344,7 @@ impl std::fmt::Debug for Descriptor {
 }
 
 #[allow(dead_code)]
-struct DataSector {
+pub(crate) struct DataSector {
     // DataSignature (4 bytes): MUST be 0x61746164 ("data" as ASCII).
     signature: Signature,
 

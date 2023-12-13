@@ -9,6 +9,7 @@ use nom::{
     sequence::tuple,
     IResult,
 };
+use uuid::uuid;
 use uuid::Uuid;
 
 use crate::{
@@ -17,14 +18,12 @@ use crate::{
         calc_total_bat_entries_differencing, calc_total_bat_entries_fixed_dynamic,
     },
     error::{VhdxError, VhdxParseError},
-    signatures::PHYSICAL_SECTOR_SIZE,
     DeSerialise,
 };
 
 use super::{
     bits_parsers::{t_2_flags_u32, t_3_flags_u32},
     parse_utils::{t_guid, t_sign_u64},
-    signatures::{FILE_PARAMETERS, LOGICAL_SECTOR_SIZE, VIRTUAL_DISK_ID, VIRTUAL_DISK_SIZE},
 };
 
 #[allow(dead_code)]
@@ -51,6 +50,15 @@ pub struct MetaData {
 }
 
 impl MetaData {
+    pub const SIGN: &'static [u8] = &[0x6D, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61];
+
+    pub const FILE_PARAMETERS: Uuid = uuid!("CAA16737FA364D43B3B633F0AA44E76B");
+    pub const VIRTUAL_DISK_SIZE: Uuid = uuid!("2FA54224CD1B4876B2115DBED83BF4B8");
+    pub const VIRTUAL_DISK_ID: Uuid = uuid!("BECA12ABB2E6452393EFC309E000C746");
+    pub const LOGICAL_SECTOR_SIZE: Uuid = uuid!("8141BF1DA96F4709BA47F233A8FAAB5F");
+    pub const PHYSICAL_SECTOR_SIZE: Uuid = uuid!("CDA348C7445D44719CC9E9885251C556");
+    pub const PARENT_LOCATOR: Uuid = uuid!("A8D35F2DB30B454DABF7D3D84834AB0C");
+
     fn new(
         signature: Signature,
         entry_count: u16,
@@ -108,51 +116,51 @@ impl<T> DeSerialise<T> for MetaData {
 
             let entry = Entry::new(signature, offset, length, a, b, c);
             match signature {
-                FILE_PARAMETERS => {
-                    entries.insert(FILE_PARAMETERS, entry);
+                MetaData::FILE_PARAMETERS => {
+                    entries.insert(MetaData::FILE_PARAMETERS, entry);
                 }
-                VIRTUAL_DISK_SIZE => {
-                    entries.insert(VIRTUAL_DISK_SIZE, entry);
+                MetaData::VIRTUAL_DISK_SIZE => {
+                    entries.insert(MetaData::VIRTUAL_DISK_SIZE, entry);
                 }
-                VIRTUAL_DISK_ID => {
-                    entries.insert(VIRTUAL_DISK_ID, entry);
+                MetaData::VIRTUAL_DISK_ID => {
+                    entries.insert(MetaData::VIRTUAL_DISK_ID, entry);
                 }
-                LOGICAL_SECTOR_SIZE => {
-                    entries.insert(LOGICAL_SECTOR_SIZE, entry);
+                MetaData::LOGICAL_SECTOR_SIZE => {
+                    entries.insert(MetaData::LOGICAL_SECTOR_SIZE, entry);
                 }
-                PHYSICAL_SECTOR_SIZE => {
-                    entries.insert(PHYSICAL_SECTOR_SIZE, entry);
+                MetaData::PHYSICAL_SECTOR_SIZE => {
+                    entries.insert(MetaData::PHYSICAL_SECTOR_SIZE, entry);
                 }
                 _ => panic!("Could not identify signature for read metadata entry"),
             }
             reader.seek(SeekFrom::Start(start_next))?;
         }
 
-        let entry = entries[&FILE_PARAMETERS];
+        let entry = entries[&MetaData::FILE_PARAMETERS];
         reader.seek(SeekFrom::Start(start_pos + entry.offset as u64))?;
         let mut buffer = [0; 8];
         reader.read_exact(&mut buffer)?;
         let (_, file_parameters) = parse_file_params(&buffer).unwrap();
 
-        let entry = entries[&VIRTUAL_DISK_SIZE];
+        let entry = entries[&MetaData::VIRTUAL_DISK_SIZE];
         reader.seek(SeekFrom::Start(start_pos + entry.offset as u64))?;
         let mut buffer = [0; 8];
         reader.read_exact(&mut buffer)?;
         let (_, virtual_disk_size) = t_v_disk_size(&buffer).unwrap();
 
-        let entry = entries[&VIRTUAL_DISK_ID];
+        let entry = entries[&MetaData::VIRTUAL_DISK_ID];
         reader.seek(SeekFrom::Start(start_pos + entry.offset as u64))?;
         let mut buffer = [0; 16];
         reader.read_exact(&mut buffer)?;
         let (_, virtual_disk_id) = t_guid(&buffer).unwrap();
 
-        let entry = entries[&LOGICAL_SECTOR_SIZE];
+        let entry = entries[&MetaData::LOGICAL_SECTOR_SIZE];
         reader.seek(SeekFrom::Start(start_pos + entry.offset as u64))?;
         let mut buffer = [0; 4];
         reader.read_exact(&mut buffer)?;
         let (_, logical_sector_size) = t_sector_size(&buffer).unwrap();
 
-        let entry = entries[&PHYSICAL_SECTOR_SIZE];
+        let entry = entries[&MetaData::PHYSICAL_SECTOR_SIZE];
         reader.seek(SeekFrom::Start(start_pos + entry.offset as u64))?;
         let mut buffer = [0; 4];
         reader.read_exact(&mut buffer)?;

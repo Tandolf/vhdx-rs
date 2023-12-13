@@ -8,7 +8,6 @@ pub mod error;
 pub mod log;
 pub mod meta_data;
 pub mod parse_utils;
-pub mod signatures;
 pub mod vhdx;
 pub mod vhdx_header;
 
