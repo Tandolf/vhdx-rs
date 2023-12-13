@@ -417,8 +417,6 @@ mod tests {
         // 2 header sections
         let entry_header = LogHeader::deserialize(&mut bytes).unwrap();
 
-        dbg!(&entry_header);
-
         assert_eq!(Signature::Loge, entry_header.signature);
     }
 }
