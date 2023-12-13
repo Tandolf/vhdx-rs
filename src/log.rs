@@ -1,6 +1,6 @@
-use nom::{number::complete::le_u128, Finish, IResult};
+use nom::Finish;
 use std::io::{Read, Seek};
-use uuid::{Builder, Uuid};
+use uuid::Uuid;
 
 use nom::{
     bytes::complete::take,
@@ -11,7 +11,7 @@ use nom::{
 
 use crate::{
     error::{VhdxError, VhdxParseError},
-    parse_utils::t_sign_u32,
+    parse_utils::{t_guid, t_sign_u32, t_u32, t_u64},
     DeSerialise, Signature,
 };
 
@@ -48,7 +48,7 @@ impl<T> DeSerialise<T> for LogEntry {
         let start_pos = reader.stream_position()?;
 
         let header = LogHeader::deserialize(reader)?;
-        let mut descriptors = Vec::with_capacity(header.descript_count);
+        let mut descriptors = Vec::with_capacity(header.descript_count as usize);
         if header.descript_count != 0 {
             for _ in 0..header.descript_count {
                 let desc = Descriptor::deserialize(reader)?;
@@ -94,7 +94,7 @@ impl<T> DeSerialise<T> for LogEntry {
 #[derive(Debug)]
 pub struct LogHeader {
     // Signature (4 bytes): MUST be 0x65676F6C ("loge" as UTF8).
-    pub signature: String,
+    pub signature: Signature,
 
     // Checksum (4 bytes): A CRC-32C hash computed over the entire entry specified by the
     // EntryLength field, with the Checksum field taking the value of zero during the computation
@@ -103,20 +103,20 @@ pub struct LogHeader {
 
     // EntryLength (4 bytes): Specifies the total length of the entry in bytes. The value MUST be a
     // multiple of 4 KB.
-    pub entry_length: usize,
+    pub entry_length: u32,
 
     // Tail (4 bytes): The offset, in bytes, from the beginning of the log to the beginning log
     // entry of a sequence ending with this entry. The value MUST be a multiple of 4 KB. A tail
     // entry could point to itself, as would be the case when a log is initialized.
-    pub tail: usize,
+    pub tail: u32,
 
     // SequenceNumber (8 bytes): A 64-bit integer incremented between each log entry. It must be
     // larger than zero.
-    pub seq_number: usize,
+    pub seq_number: u64,
 
     // DescriptorCount (4 bytes): Specifies the number of descriptors that are contained in this
     // log entry. The value can be zero.
-    pub descript_count: usize,
+    pub descript_count: u32,
 
     // LogGuid (16 bytes): Contains the LogGuid value in the file header that was present when this
     // log entry was written. When replaying, if this LogGuid does not match the LogGuid field in
@@ -136,24 +136,24 @@ pub struct LogHeader {
     // structures fit into, at the time the log entry was written. An implementation SHOULD write
     // the smallest possible value that satisfies these requirements. The value MUST be a multiple
     // of 1 MB.
-    pub flushed_file_offset: usize,
+    pub flushed_file_offset: u64,
 
     // LastFileOffset (8 bytes): Stores a file size in bytes that all allocated file structures fit
     // into, at the time the log entry was written. An implementation SHOULD write the smallest
     // possible value that satisfies these requirements. The value MUST be a multiple of 1 MB.
-    pub last_file_offset: usize,
+    pub last_file_offset: u64,
 }
 impl LogHeader {
     fn new(
-        signature: String,
+        signature: Signature,
         checksum: u32,
-        entry_length: usize,
-        tail: usize,
-        seq_number: usize,
-        descript_count: usize,
+        entry_length: u32,
+        tail: u32,
+        seq_number: u64,
+        descript_count: u32,
         log_guid: Uuid,
-        flushed_file_offset: usize,
-        last_file_offset: usize,
+        flushed_file_offset: u64,
+        last_file_offset: u64,
     ) -> Self {
         Self {
             signature,
@@ -169,28 +169,6 @@ impl LogHeader {
     }
 }
 
-fn t_signature(buffer: &[u8]) -> IResult<&[u8], String> {
-    map(take(4usize), |bytes: &[u8]| {
-        String::from_utf8(bytes.to_vec()).unwrap()
-    })(buffer)
-}
-
-fn t_checksum(buffer: &[u8]) -> IResult<&[u8], u32> {
-    le_u32(buffer)
-}
-
-fn t_4bytes_usize(buffer: &[u8]) -> IResult<&[u8], usize> {
-    map(le_u32, |v: u32| v as usize)(buffer)
-}
-
-fn t_8bytes_usize(buffer: &[u8]) -> IResult<&[u8], usize> {
-    map(le_u64, |v: u64| v as usize)(buffer)
-}
-
-fn t_guid(buffer: &[u8]) -> IResult<&[u8], Uuid> {
-    map(le_u128, |v: u128| Builder::from_u128_le(v).into_uuid())(buffer)
-}
-
 impl<T> DeSerialise<T> for LogHeader {
     type Item = LogHeader;
 
@@ -203,16 +181,7 @@ impl<T> DeSerialise<T> for LogHeader {
 
         let (_, header) = map(
             tuple((
-                t_signature,
-                t_checksum,
-                t_4bytes_usize,
-                t_4bytes_usize,
-                t_8bytes_usize,
-                t_4bytes_usize,
-                t_4bytes_usize,
-                t_guid,
-                t_8bytes_usize,
-                t_8bytes_usize,
+                t_sign_u32, t_u32, t_u32, t_u32, t_u64, t_u32, t_u32, t_guid, t_u64, t_u64,
             )),
             |(
                 signature,
@@ -239,8 +208,7 @@ impl<T> DeSerialise<T> for LogHeader {
                 )
             },
         )(&buffer)
-        .finish()
-        .map_err(VhdxParseError::Nom)?;
+        .finish()?;
         Ok(header)
     }
 }
@@ -451,6 +419,6 @@ mod tests {
 
         dbg!(&entry_header);
 
-        assert_eq!("loge", entry_header.signature);
+        assert_eq!(Signature::Loge, entry_header.signature);
     }
 }
