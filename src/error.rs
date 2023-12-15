@@ -18,6 +18,9 @@ pub enum VhdxError {
 
     #[error("Unknown RT Entry found: {0}")]
     UnknownRTEntryFound(String),
+
+    #[error("Missing region in Region Table: {0}")]
+    MissingKnownRegion(&'static str),
 }
 
 impl From<VhdxParseError<&[u8]>> for VhdxError {

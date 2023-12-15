@@ -14,7 +14,7 @@ pub mod vhdx_header;
 pub trait DeSerialise<T> {
     type Item;
 
-    fn deserialize(fs: &mut T) -> Result<Self::Item, VhdxError>
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek;
 }

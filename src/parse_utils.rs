@@ -1,6 +1,6 @@
 use crate::{
     error::VhdxParseError,
-    log::{Descriptor, LogHeader},
+    log::{DataDesc, Descriptor, LogHeader, ZeroDesc},
     meta_data::MetaData,
     vhdx_header::{FileTypeIdentifier, Header, RegionTable},
     Signature,
@@ -27,8 +27,8 @@ pub fn t_sign_u32(buffer: &[u8]) -> IResult<&[u8], Signature, VhdxParseError<&[u
         Header::SIGN => Signature::Head,
         RegionTable::SIGN => Signature::Regi,
         Descriptor::SIGN => Signature::Desc,
-        Descriptor::ZERO_SIGN => Signature::Zero,
-        Descriptor::DATA_SIGN => Signature::Data,
+        ZeroDesc::SIGN => Signature::Zero,
+        DataDesc::SIGN => Signature::Data,
         LogHeader::SIGN => Signature::Loge,
         _ => Signature::Unknown,
     })(buffer)

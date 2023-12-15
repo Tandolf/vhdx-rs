@@ -1,3 +1,4 @@
+use crc::{Crc, CRC_32_ISCSI};
 use nom::Finish;
 use std::io::{Read, Seek};
 use uuid::Uuid;
@@ -12,7 +13,7 @@ use nom::{
 use crate::{
     error::{VhdxError, VhdxParseError},
     parse_utils::{t_guid, t_sign_u32, t_u32, t_u64},
-    DeSerialise, Signature,
+    Crc32, DeSerialise, Signature,
 };
 
 #[derive(Debug)]
@@ -23,7 +24,7 @@ pub struct Log {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct LogEntry {
-    pub header: LogHeader,
+    pub(crate) header: LogHeader,
     descriptors: Vec<Descriptor>,
 }
 
@@ -35,6 +36,15 @@ impl LogEntry {
             header,
             descriptors,
         }
+    }
+
+    fn valid(uuid: Uuid) -> bool {
+        // header and all descriptors must have the same guid
+        // same sequence_number in every descriptor
+        // sequence number is split between the beginning and end of data sectors
+        // CRC32 over the entire LogEntry
+
+        false
     }
 }
 
@@ -51,43 +61,44 @@ impl<T> DeSerialise<T> for LogEntry {
         let mut descriptors = Vec::with_capacity(header.descript_count as usize);
         if header.descript_count != 0 {
             for _ in 0..header.descript_count {
-                let desc = Descriptor::deserialize(reader)?;
+                let mut buffer = [0; 4];
+                reader.read_exact(&mut buffer)?;
+                let mut peeker = peek(t_sign_u32);
+                let (_, signature) = peeker(&buffer)?;
+                dbg!(signature);
+                reader.seek(std::io::SeekFrom::Current(-4))?;
+                dbg!(signature);
+                let desc = match signature {
+                    Signature::Desc => Descriptor::Data(DataDesc::deserialize(reader)?),
+                    Signature::Zero => Descriptor::Zero(ZeroDesc::deserialize(reader)?),
+                    _ => panic!("Fix this error"),
+                };
                 descriptors.push(desc);
             }
         }
+
         let current_pos = reader.stream_position()?;
         let offset = LogEntry::SECTOR_SIZE as u64 - (current_pos - start_pos);
         reader.seek(std::io::SeekFrom::Current(offset as i64))?;
 
-        for desc in descriptors.iter_mut().filter(|v| {
-            matches!(
-                v,
-                Descriptor::Data {
-                    signature: _,
-                    trailing_bytes: _,
-                    leading_bytes: _,
-                    file_offset: _,
-                    seq_number: _,
-                    data_sector: _,
-                }
-            )
-        }) {
-            let d_sector = DataSector::deserialize(reader)?;
-            if let Descriptor::Data {
-                signature: _,
-                trailing_bytes: _,
-                leading_bytes: _,
-                file_offset: _,
-                seq_number: _,
-                data_sector,
-            } = desc
-            {
-                *data_sector = Some(d_sector);
+        descriptors.iter_mut().for_each(|v| match v {
+            Descriptor::Data(desc) => {
+                let d_sector = DataSector::deserialize(reader).unwrap();
+                desc.data_sector = Some(d_sector);
             }
-        }
-
+            Descriptor::Zero(_) => todo!(),
+        });
         let log_entry = LogEntry::new(header, descriptors);
         Ok(log_entry)
+    }
+}
+
+impl Crc32 for LogEntry {
+    fn crc32(&self) -> u32 {
+        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+        let mut hasher = crc.digest();
+
+        hasher.finalize()
     }
 }
 
@@ -143,6 +154,7 @@ pub struct LogHeader {
     // possible value that satisfies these requirements. The value MUST be a multiple of 1 MB.
     pub last_file_offset: u64,
 }
+
 impl LogHeader {
     pub const SIGN: &'static [u8] = &[0x6C, 0x6F, 0x67, 0x65];
     fn new(
@@ -214,57 +226,53 @@ impl<T> DeSerialise<T> for LogHeader {
     }
 }
 
+impl Crc32 for LogHeader {
+    fn crc32(&self) -> u32 {
+        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+        let mut hasher = crc.digest();
+
+        hasher.update(LogHeader::SIGN);
+        hasher.update(&self.checksum.to_le_bytes());
+        hasher.update(&self.entry_length.to_le_bytes());
+        hasher.update(&self.tail.to_le_bytes());
+        hasher.update(&self.seq_number.to_le_bytes());
+        hasher.update(&self.descript_count.to_le_bytes());
+        hasher.update(&[0; 4]);
+        hasher.update(&self.log_guid.to_bytes_le());
+        hasher.update(&self.flushed_file_offset.to_le_bytes());
+        hasher.update(&self.last_file_offset.to_le_bytes());
+        hasher.finalize()
+    }
+}
+
 #[allow(dead_code)]
+#[derive(Debug)]
 pub(crate) enum Descriptor {
-    Zero {
-        // ZeroSignature (4 bytes): MUST be 0x6F72657A ("zero" as ASCII).
-        signature: Signature,
-
-        // ZeroLength (8 bytes): Specifies the length of the section to zero. The value MUST be a
-        // multiple of 4 KB.
-        zero_length: u64,
-
-        // FileOffset (8 bytes): Specifies the file offset to which zeros MUST be written. The
-        // value MUST be a multiple of 4 KB.
-        file_offset: u64,
-
-        // SequenceNumber (8 bytes): MUST match the SequenceNumber field of the log entry's header.
-        seq_number: u64,
-    },
-    Data {
-        // DataSignature (4 bytes): MUST be 0x63736564 ("desc" as ASCII).
-        signature: Signature,
-
-        // TrailingBytes (4 bytes): Contains the four trailing bytes that were removed from the
-        // update when it was converted to a data sector. These trailing bytes MUST be restored
-        // before the data sector is written to its final location on disk.
-        trailing_bytes: Vec<u8>,
-
-        // LeadingBytes (8 bytes): Contains the first eight bytes that were removed from the update
-        // when it was converted to a data sector. These leading bytes MUST be restored before the
-        // data sector is written to its final location on disk.
-        leading_bytes: Vec<u8>,
-
-        // FileOffset (8 bytes): Specifies the file offset to which the data described by this
-        // descriptor MUST be written. The value MUST be a multiple of 4 KB.
-        file_offset: u64,
-
-        // SequenceNumber (8 bytes): MUST match the SequenceNumber field of the entry's header.
-        seq_number: u64,
-
-        // Data sector belonging to this descriptor
-        data_sector: Option<DataSector>,
-    },
+    Zero(ZeroDesc),
+    Data(DataDesc),
 }
 
-impl Descriptor {
-    pub const SIGN: &'static [u8] = &[0x64, 0x65, 0x73, 0x63];
-    pub const ZERO_SIGN: &'static [u8] = &[0x6F, 0x72, 0x65, 0x7A];
-    pub const DATA_SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
+pub(crate) struct ZeroDesc {
+    // ZeroSignature (4 bytes): MUST be 0x6F72657A ("zero" as ASCII).
+    signature: Signature,
+
+    // ZeroLength (8 bytes): Specifies the length of the section to zero. The value MUST be a
+    // multiple of 4 KB.
+    zero_length: u64,
+
+    // FileOffset (8 bytes): Specifies the file offset to which zeros MUST be written. The
+    // value MUST be a multiple of 4 KB.
+    file_offset: u64,
+
+    // SequenceNumber (8 bytes): MUST match the SequenceNumber field of the log entry's header.
+    seq_number: u64,
+}
+impl ZeroDesc {
+    pub(crate) const SIGN: &'static [u8] = &[0x6F, 0x72, 0x65, 0x7A];
 }
 
-impl<T> DeSerialise<T> for Descriptor {
-    type Item = Descriptor;
+impl<T> DeSerialise<T> for ZeroDesc {
+    type Item = ZeroDesc;
 
     fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
@@ -272,75 +280,96 @@ impl<T> DeSerialise<T> for Descriptor {
     {
         let mut buffer = [0; 32];
         reader.read_exact(&mut buffer)?;
-        let mut peeker = peek(t_sign_u32);
-        let (buffer, signature) = peeker(&buffer)?;
-        let (_, descriptor) = match signature {
-            Signature::Desc => parse_desc(buffer)?,
-            Signature::Zero => parse_zero(buffer)?,
-            _ => Err(VhdxParseError::UnknownSignature)?,
-        };
-
-        Ok(descriptor)
+        let (_, zero_desc) = map(
+            tuple((t_sign_u32, le_u32, le_u64, le_u64, le_u64)),
+            |(signature, _, zero_length, file_offset, seq_number)| ZeroDesc {
+                signature,
+                zero_length,
+                file_offset,
+                seq_number,
+            },
+        )(&buffer)
+        .finish()?;
+        Ok(zero_desc)
     }
 }
 
-fn parse_zero(buffer: &[u8]) -> Result<(&[u8], Descriptor), VhdxParseError<&[u8]>> {
-    map(
-        tuple((t_sign_u32, le_u32, le_u64, le_u64, le_u64)),
-        |(signature, _, zero_length, file_offset, seq_number)| Descriptor::Zero {
-            signature,
-            zero_length,
-            file_offset,
-            seq_number,
-        },
-    )(buffer)
-    .finish()
-}
-
-fn parse_desc(buffer: &[u8]) -> Result<(&[u8], Descriptor), VhdxParseError<&[u8]>> {
-    map(
-        tuple((t_sign_u32, take(4usize), take(8usize), le_u64, le_u64)),
-        |(signature, trailing_bytes, leading_bytes, file_offset, seq_number)| Descriptor::Data {
-            signature,
-            trailing_bytes: trailing_bytes.to_vec(),
-            leading_bytes: leading_bytes.to_vec(),
-            file_offset,
-            seq_number,
-            data_sector: None,
-        },
-    )(buffer)
-    .finish()
-}
-
-impl std::fmt::Debug for Descriptor {
+impl std::fmt::Debug for ZeroDesc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Descriptor::Zero {
-                signature,
-                zero_length: _,
-                file_offset,
-                seq_number,
-            } => f
-                .debug_struct("Descriptor")
-                .field("signature", signature)
-                .field("file_offset", file_offset)
-                .field("seq_number", seq_number)
-                .finish(),
-            Descriptor::Data {
-                signature,
-                trailing_bytes: _,
-                leading_bytes: _,
-                file_offset,
-                seq_number,
-                data_sector: _,
-            } => f
-                .debug_struct("Data")
-                .field("signature", signature)
-                .field("file_offset", file_offset)
-                .field("seq_number", seq_number)
-                .finish(),
-        }
+        f.debug_struct("Descriptor")
+            .field("signature", &self.signature)
+            .field("file_offset", &self.file_offset)
+            .field("seq_number", &self.seq_number)
+            .finish()
     }
+}
+
+pub(crate) struct DataDesc {
+    signature: Signature,
+
+    // TrailingBytes (4 bytes): Contains the four trailing bytes that were removed from the
+    // update when it was converted to a data sector. These trailing bytes MUST be restored
+    // before the data sector is written to its final location on disk.
+    trailing_bytes: Vec<u8>,
+
+    // LeadingBytes (8 bytes): Contains the first eight bytes that were removed from the update
+    // when it was converted to a data sector. These leading bytes MUST be restored before the
+    // data sector is written to its final location on disk.
+    leading_bytes: Vec<u8>,
+
+    // FileOffset (8 bytes): Specifies the file offset to which the data described by this
+    // descriptor MUST be written. The value MUST be a multiple of 4 KB.
+    file_offset: u64,
+
+    // SequenceNumber (8 bytes): MUST match the SequenceNumber field of the entry's header.
+    seq_number: u64,
+
+    // Data sector belonging to this descriptor
+    data_sector: Option<DataSector>,
+}
+
+impl<T> DeSerialise<T> for DataDesc {
+    type Item = DataDesc;
+
+    fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
+    where
+        T: Read + Seek,
+    {
+        let mut buffer = [0; 32];
+        reader.read_exact(&mut buffer)?;
+        let (_, data_desc) = map(
+            tuple((t_sign_u32, take(4usize), take(8usize), le_u64, le_u64)),
+            |(signature, trailing_bytes, leading_bytes, file_offset, seq_number)| DataDesc {
+                signature,
+                trailing_bytes: trailing_bytes.to_vec(),
+                leading_bytes: leading_bytes.to_vec(),
+                file_offset,
+                seq_number,
+                data_sector: None,
+            },
+        )(&buffer)
+        .finish()?;
+        Ok(data_desc)
+    }
+}
+
+impl std::fmt::Debug for DataDesc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Data")
+            .field("signature", &self.signature)
+            .field("file_offset", &self.file_offset)
+            .field("seq_number", &self.seq_number)
+            .field("data_sector", &self.data_sector)
+            .finish()
+    }
+}
+
+impl DataDesc {
+    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
+}
+
+impl Descriptor {
+    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x65, 0x73, 0x63];
 }
 
 #[allow(dead_code)]
@@ -350,7 +379,7 @@ pub(crate) struct DataSector {
 
     // SequenceHigh (4 bytes): MUST
     // contain the four most significant bytes of the SequenceNumber field of the associated entry.
-    seq_high: Vec<u8>,
+    seq_high: u32,
 
     // Data (4084 bytes): Contains the raw data associated with the update, bytes 8 through 4,091,
     // inclusive. Bytes 0 through 7 and 4,092 through 4,096 are stored in the data descriptor, in
@@ -359,16 +388,20 @@ pub(crate) struct DataSector {
     //
     // SequenceLow (4 bytes): MUST contain
     // the four least significant bytes of the SequenceNumber field of the associated entry.
-    seq_low: Vec<u8>,
+    seq_low: u32,
 }
 impl DataSector {
-    fn new(signature: Signature, seq_high: &[u8], data: &[u8], seq_low: &[u8]) -> Self {
+    fn new(signature: Signature, seq_high: u32, data: &[u8], seq_low: u32) -> Self {
         Self {
             signature,
-            seq_high: seq_high.to_vec(),
+            seq_high,
             data: data.to_vec(),
-            seq_low: seq_low.to_vec(),
+            seq_low,
         }
+    }
+
+    fn sequence_number(&self) -> u64 {
+        ((self.seq_high as u64) << 32) | self.seq_low as u64
     }
 }
 
@@ -382,7 +415,7 @@ impl<T> DeSerialise<T> for DataSector {
         let mut buffer = [0; 4096];
         reader.read_exact(&mut buffer)?;
         let (_, data_sector) = map(
-            tuple((t_sign_u32, take(4usize), take(4084usize), take(4usize))),
+            tuple((t_sign_u32, le_u32, take(4084usize), le_u32)),
             |(signature, sequence_high, data, sequence_low)| {
                 DataSector::new(signature, sequence_high, data, sequence_low)
             },
@@ -396,6 +429,7 @@ impl std::fmt::Debug for DataSector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DataSector")
             .field("signature", &self.signature)
+            .field("sequence_number", &self.sequence_number())
             .finish()
     }
 }

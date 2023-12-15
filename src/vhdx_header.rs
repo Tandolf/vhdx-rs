@@ -13,21 +13,19 @@ use crate::error::{Result, VhdxError, VhdxParseError};
 use crate::parse_utils::{
     t_bool_u32, t_creator, t_guid, t_sign_u32, t_sign_u64, t_u16, t_u32, t_u64,
 };
+use crate::vhdx::Vhdx;
 use crate::{Crc32, DeSerialise, Signature};
-
-pub const SECTION_SIZE: usize = 64000;
-pub const HEADER_TOTAL_SIZE: usize = 1000000;
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct MainHeader {
+pub struct VhdxHeader {
     fti: FileTypeIdentifier,
     pub header_1: Header,
     pub header_2: Header,
     pub region_table_1: RegionTable,
     pub region_table_2: RegionTable,
 }
-impl MainHeader {
+impl VhdxHeader {
     fn new(
         fti: FileTypeIdentifier,
         header_1: Header,
@@ -45,20 +43,25 @@ impl MainHeader {
     }
 }
 
-impl<T> DeSerialise<T> for MainHeader {
-    type Item = MainHeader;
+impl<T> DeSerialise<T> for VhdxHeader {
+    type Item = VhdxHeader;
 
     fn deserialize(reader: &mut T) -> Result<Self::Item, VhdxError>
     where
         T: Read + Seek,
     {
+        reader.rewind()?;
         let fti = FileTypeIdentifier::deserialize(reader)?;
+        reader.seek(SeekFrom::Start(64 * Vhdx::KB))?;
         let header_1 = Header::deserialize(reader)?;
+        reader.seek(SeekFrom::Start(128 * Vhdx::KB))?;
         let header_2 = Header::deserialize(reader)?;
+        reader.seek(SeekFrom::Start(192 * Vhdx::KB))?;
         let rt_1 = RegionTable::deserialize(reader)?;
+        reader.seek(SeekFrom::Start(256 * Vhdx::KB))?;
         let rt_2 = RegionTable::deserialize(reader)?;
 
-        Ok(MainHeader::new(fti, header_1, header_2, rt_1, rt_2))
+        Ok(VhdxHeader::new(fti, header_1, header_2, rt_1, rt_2))
     }
 }
 
@@ -139,7 +142,7 @@ pub struct Header {
     // Otherwise, only log entries that contain this identifier in their header are valid log
     // entries. Upon open, the implementation MUST update this field to a new nonzero value before
     // overwriting existing space within the log region.
-    log_guid: Uuid,
+    pub(crate) log_guid: Uuid,
 
     // Specifies the version of the log format used within the VHDX file. This field MUST be set to
     // zero. If it is not, the implementation MUST NOT continue to process the file unless the
@@ -316,7 +319,6 @@ impl<T> DeSerialise<T> for RegionTable {
         let mut buffer = [0; RegionTable::HEADER_SIZE];
         reader.read_exact(&mut buffer)?;
         let (_, mut header) = parse_header(&buffer)?;
-        let mut offset = RegionTable::RT_HEADER_SIZE - RegionTable::HEADER_SIZE;
         for _ in 0..header.entry_count {
             let entry = RTEntry::deserialize(reader)?;
             let known_region = match entry.guid {
@@ -325,10 +327,7 @@ impl<T> DeSerialise<T> for RegionTable {
                 _ => Err(VhdxError::UnknownRTEntryFound(entry.guid.to_string())),
             }?;
             header.table_entries.insert(known_region, entry);
-            offset -= RegionTable::ENTRY_SIZE;
         }
-
-        reader.seek(SeekFrom::Current(offset as i64))?;
 
         Ok(header)
     }
@@ -449,7 +448,7 @@ mod tests {
 
         let mut bytes = Cursor::new(bytes);
 
-        let header = MainHeader::deserialize(&mut bytes).unwrap();
+        let header = VhdxHeader::deserialize(&mut bytes).unwrap();
 
         dbg!(&header);
 
