@@ -1,6 +1,9 @@
 use crc::{Crc, CRC_32_ISCSI};
 use nom::Finish;
-use std::io::{Read, Seek};
+use std::{
+    io::{Read, Seek},
+    iter, usize,
+};
 use uuid::Uuid;
 
 use nom::{
@@ -11,7 +14,7 @@ use nom::{
 };
 
 use crate::{
-    error::{VhdxError, VhdxParseError},
+    error::VhdxError,
     parse_utils::{t_guid, t_sign_u32, t_u32, t_u64},
     Crc32, DeSerialise, Signature,
 };
@@ -30,6 +33,7 @@ pub struct LogEntry {
 
 impl LogEntry {
     const SECTOR_SIZE: usize = 4096;
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
 
     fn new(header: LogHeader, descriptors: Vec<Descriptor>) -> Self {
         Self {
@@ -65,9 +69,7 @@ impl<T> DeSerialise<T> for LogEntry {
                 reader.read_exact(&mut buffer)?;
                 let mut peeker = peek(t_sign_u32);
                 let (_, signature) = peeker(&buffer)?;
-                dbg!(signature);
                 reader.seek(std::io::SeekFrom::Current(-4))?;
-                dbg!(signature);
                 let desc = match signature {
                     Signature::Desc => Descriptor::Data(DataDesc::deserialize(reader)?),
                     Signature::Zero => Descriptor::Zero(ZeroDesc::deserialize(reader)?),
@@ -95,10 +97,39 @@ impl<T> DeSerialise<T> for LogEntry {
 
 impl Crc32 for LogEntry {
     fn crc32(&self) -> u32 {
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut hasher = crc.digest();
+        let mut digest = LogEntry::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
 
-        hasher.finalize()
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        self.header.crc32_from_digest(digest);
+        self.descriptors.crc32_from_digest(digest);
+    }
+}
+
+impl Crc32 for Vec<Descriptor> {
+    fn crc32(&self) -> u32 {
+        todo!()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        self.iter().for_each(|desc| {
+            desc.crc32_from_digest(digest);
+        });
+
+        let zeros: Vec<u8> = iter::repeat(0)
+            .take(4096 - ((64 + (self.len() * 32)) % 4096))
+            .collect();
+        digest.update(&zeros);
+
+        self.iter().for_each(|desc| {
+            if let Descriptor::Data(desc) = desc {
+                if let Some(data) = &desc.data_sector {
+                    data.crc32_from_digest(digest);
+                }
+            }
+        });
     }
 }
 
@@ -157,6 +188,7 @@ pub struct LogHeader {
 
 impl LogHeader {
     pub const SIGN: &'static [u8] = &[0x6C, 0x6F, 0x67, 0x65];
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
     fn new(
         signature: Signature,
         checksum: u32,
@@ -228,20 +260,22 @@ impl<T> DeSerialise<T> for LogHeader {
 
 impl Crc32 for LogHeader {
     fn crc32(&self) -> u32 {
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut hasher = crc.digest();
+        let mut digest = LogHeader::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
 
-        hasher.update(LogHeader::SIGN);
-        hasher.update(&self.checksum.to_le_bytes());
-        hasher.update(&self.entry_length.to_le_bytes());
-        hasher.update(&self.tail.to_le_bytes());
-        hasher.update(&self.seq_number.to_le_bytes());
-        hasher.update(&self.descript_count.to_le_bytes());
-        hasher.update(&[0; 4]);
-        hasher.update(&self.log_guid.to_bytes_le());
-        hasher.update(&self.flushed_file_offset.to_le_bytes());
-        hasher.update(&self.last_file_offset.to_le_bytes());
-        hasher.finalize()
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(LogHeader::SIGN);
+        digest.update(&[0; 4]);
+        digest.update(&self.entry_length.to_le_bytes());
+        digest.update(&self.tail.to_le_bytes());
+        digest.update(&self.seq_number.to_le_bytes());
+        digest.update(&self.descript_count.to_le_bytes());
+        digest.update(&[0; 4]);
+        digest.update(&self.log_guid.to_bytes_le());
+        digest.update(&self.flushed_file_offset.to_le_bytes());
+        digest.update(&self.last_file_offset.to_le_bytes());
     }
 }
 
@@ -250,6 +284,11 @@ impl Crc32 for LogHeader {
 pub(crate) enum Descriptor {
     Zero(ZeroDesc),
     Data(DataDesc),
+}
+
+impl Descriptor {
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
+    const SIZE: usize = 32;
 }
 
 pub(crate) struct ZeroDesc {
@@ -268,7 +307,23 @@ pub(crate) struct ZeroDesc {
     seq_number: u64,
 }
 impl ZeroDesc {
-    pub(crate) const SIGN: &'static [u8] = &[0x6F, 0x72, 0x65, 0x7A];
+    pub(crate) const SIGN: &'static [u8] = &[0x7A, 0x65, 0x72, 0x67];
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
+}
+
+impl Crc32 for Descriptor {
+    fn crc32(&self) -> u32 {
+        let mut digest = Descriptor::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        match self {
+            Descriptor::Zero(z) => z.crc32_from_digest(digest),
+            Descriptor::Data(d) => d.crc32_from_digest(digest),
+        }
+    }
 }
 
 impl<T> DeSerialise<T> for ZeroDesc {
@@ -304,6 +359,22 @@ impl std::fmt::Debug for ZeroDesc {
     }
 }
 
+impl Crc32 for ZeroDesc {
+    fn crc32(&self) -> u32 {
+        let mut digest = ZeroDesc::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(ZeroDesc::SIGN);
+        digest.update(&[0; 4]);
+        digest.update(&self.zero_length.to_le_bytes());
+        digest.update(&self.file_offset.to_le_bytes());
+        digest.update(&self.seq_number.to_le_bytes());
+    }
+}
+
 pub(crate) struct DataDesc {
     signature: Signature,
 
@@ -326,6 +397,11 @@ pub(crate) struct DataDesc {
 
     // Data sector belonging to this descriptor
     data_sector: Option<DataSector>,
+}
+
+impl DataDesc {
+    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x65, 0x73, 0x63];
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
 }
 
 impl<T> DeSerialise<T> for DataDesc {
@@ -353,6 +429,22 @@ impl<T> DeSerialise<T> for DataDesc {
     }
 }
 
+impl Crc32 for DataDesc {
+    fn crc32(&self) -> u32 {
+        let mut digest = DataDesc::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(DataDesc::SIGN);
+        digest.update(&self.trailing_bytes);
+        digest.update(&self.leading_bytes);
+        digest.update(&self.file_offset.to_le_bytes());
+        digest.update(&self.seq_number.to_le_bytes());
+    }
+}
+
 impl std::fmt::Debug for DataDesc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Data")
@@ -362,14 +454,6 @@ impl std::fmt::Debug for DataDesc {
             .field("data_sector", &self.data_sector)
             .finish()
     }
-}
-
-impl DataDesc {
-    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
-}
-
-impl Descriptor {
-    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x65, 0x73, 0x63];
 }
 
 #[allow(dead_code)]
@@ -390,7 +474,12 @@ pub(crate) struct DataSector {
     // the four least significant bytes of the SequenceNumber field of the associated entry.
     seq_low: u32,
 }
+
 impl DataSector {
+    pub(crate) const SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
+    const SIZE: usize = 4096;
+
     fn new(signature: Signature, seq_high: u32, data: &[u8], seq_low: u32) -> Self {
         Self {
             signature,
@@ -422,6 +511,21 @@ impl<T> DeSerialise<T> for DataSector {
         )(&buffer)?;
 
         Ok(data_sector)
+    }
+}
+
+impl Crc32 for DataSector {
+    fn crc32(&self) -> u32 {
+        let mut digest = DataSector::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(DataSector::SIGN);
+        digest.update(&self.seq_high.to_le_bytes());
+        digest.update(&self.data);
+        digest.update(&self.seq_low.to_le_bytes());
     }
 }
 

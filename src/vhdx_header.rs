@@ -165,6 +165,7 @@ pub struct Header {
 
 impl Header {
     const SIZE: usize = 65536;
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
     pub const SIGN: &'static [u8] = &[0x68, 0x65, 0x61, 0x64];
     fn new(
         signature: Signature,
@@ -195,21 +196,23 @@ impl Header {
 
 impl Crc32 for Header {
     fn crc32(&self) -> u32 {
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut hasher = crc.digest();
+        let mut digest = Header::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
 
-        hasher.update(Header::SIGN);
-        hasher.update(&[0; 4]);
-        hasher.update(&self.seq_number.to_le_bytes());
-        hasher.update(&self.file_write_guid.to_bytes_le());
-        hasher.update(&self.data_write_guid.to_bytes_le());
-        hasher.update(&self.log_guid.to_bytes_le());
-        hasher.update(&self.log_version.to_le_bytes());
-        hasher.update(&self.version.to_le_bytes());
-        hasher.update(&self.log_length.to_le_bytes());
-        hasher.update(&self.log_offset.to_le_bytes());
-        hasher.update(&[0; 4016]);
-        hasher.finalize()
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(Header::SIGN);
+        digest.update(&[0; 4]);
+        digest.update(&self.seq_number.to_le_bytes());
+        digest.update(&self.file_write_guid.to_bytes_le());
+        digest.update(&self.data_write_guid.to_bytes_le());
+        digest.update(&self.log_guid.to_bytes_le());
+        digest.update(&self.log_version.to_le_bytes());
+        digest.update(&self.version.to_le_bytes());
+        digest.update(&self.log_length.to_le_bytes());
+        digest.update(&self.log_offset.to_le_bytes());
+        digest.update(&[0; 4016]);
     }
 }
 

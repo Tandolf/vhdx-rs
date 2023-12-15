@@ -85,6 +85,12 @@ impl Vhdx {
         let bat_table: Vec<BatEntry> = (0..meta_data.total_bat_entries_fixed_dynamic)
             .map(|_| BatEntry::deserialize(&mut reader).unwrap())
             .collect();
+
+        let v = &log_entries[0];
+        dbg!(v.crc32());
+        let v = &log_entries[1];
+        dbg!(v.crc32());
+
         let mut vhdx = Vhdx {
             file: reader,
             header,

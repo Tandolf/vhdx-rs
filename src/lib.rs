@@ -21,6 +21,7 @@ pub trait DeSerialise<T> {
 
 pub trait Crc32 {
     fn crc32(&self) -> u32;
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>);
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
