@@ -24,6 +24,10 @@ pub trait Crc32 {
     fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>);
 }
 
+pub trait Validation {
+    fn validate(&self) -> Result<(), VhdxError>;
+}
+
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum Signature {
     Vhdxfile,

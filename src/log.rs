@@ -16,16 +16,28 @@ use nom::{
 use crate::{
     error::VhdxError,
     parse_utils::{t_guid, t_sign_u32, t_u32, t_u64},
-    Crc32, DeSerialise, Signature,
+    vhdx::Vhdx,
+    Crc32, DeSerialise, Signature, Validation,
 };
 
 #[derive(Debug)]
 pub struct Log {
     pub log_entries: Vec<LogEntry>,
+    pub log_sequence: LogSequence,
+}
+
+impl Log {
+    pub(crate) fn new(log_entries: Vec<LogEntry>) -> Self {
+        let entries = log_entries.clone();
+        Self {
+            log_entries,
+            log_sequence: Vhdx::try_get_log_sequence(&entries).unwrap(),
+        }
+    }
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogEntry {
     pub(crate) header: LogHeader,
     descriptors: Vec<Descriptor>,
@@ -41,14 +53,11 @@ impl LogEntry {
             descriptors,
         }
     }
+}
 
-    fn valid(uuid: Uuid) -> bool {
-        // header and all descriptors must have the same guid
-        // same sequence_number in every descriptor
-        // sequence number is split between the beginning and end of data sectors
-        // CRC32 over the entire LogEntry
-
-        false
+impl Validation for LogEntry {
+    fn validate(&self) -> Result<(), VhdxError> {
+        Ok(())
     }
 }
 
@@ -133,7 +142,7 @@ impl Crc32 for Vec<Descriptor> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogHeader {
     // Signature (4 bytes): MUST be 0x65676F6C ("loge" as UTF8).
     pub signature: Signature,
@@ -280,7 +289,7 @@ impl Crc32 for LogHeader {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Descriptor {
     Zero(ZeroDesc),
     Data(DataDesc),
@@ -291,6 +300,7 @@ impl Descriptor {
     const SIZE: usize = 32;
 }
 
+#[derive(Clone)]
 pub(crate) struct ZeroDesc {
     // ZeroSignature (4 bytes): MUST be 0x6F72657A ("zero" as ASCII).
     signature: Signature,
@@ -375,6 +385,7 @@ impl Crc32 for ZeroDesc {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct DataDesc {
     signature: Signature,
 
@@ -457,6 +468,7 @@ impl std::fmt::Debug for DataDesc {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub(crate) struct DataSector {
     // DataSignature (4 bytes): MUST be 0x61746164 ("data" as ASCII).
     signature: Signature,
@@ -535,6 +547,31 @@ impl std::fmt::Debug for DataSector {
             .field("signature", &self.signature)
             .field("sequence_number", &self.sequence_number())
             .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct LogSequence {
+    pub sequence_number: u64,
+    pub entries: Vec<LogEntry>,
+    pub head_value: u64,
+    pub tail_value: u64,
+}
+impl LogSequence {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.head()
+            .map(|v| {
+                self.tail_value <= v.header.tail as u64 && self.head_value >= v.header.tail as u64
+            })
+            .unwrap_or(false)
+    }
+
+    fn head(&self) -> Option<&LogEntry> {
+        self.entries.last()
     }
 }
 

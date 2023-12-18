@@ -1,6 +1,7 @@
+#![allow(dead_code)]
 use crate::bat::BatEntry;
+use crate::log::LogSequence;
 use crate::vhdx_header::Header;
-use crate::DeSerialise;
 use crate::{
     error::{Result, VhdxError},
     log::{Log, LogEntry},
@@ -9,6 +10,7 @@ use crate::{
     vhdx_header::{KnowRegion, VhdxHeader},
     Crc32, Signature,
 };
+use crate::{DeSerialise, Validation};
 use nom::combinator::peek;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -32,7 +34,6 @@ impl Vhdx {
         let mut reader = File::options().read(true).write(true).open(path)?;
 
         let header = VhdxHeader::deserialize(&mut reader)?;
-
         // Hardcoded to read the first header
         let h = &header.header_1;
         let h2 = &header.header_2;
@@ -86,20 +87,16 @@ impl Vhdx {
             .map(|_| BatEntry::deserialize(&mut reader).unwrap())
             .collect();
 
-        let v = &log_entries[0];
-        dbg!(v.crc32());
-        let v = &log_entries[1];
-        dbg!(v.crc32());
-
-        let mut vhdx = Vhdx {
+        let log = Log::new(log_entries);
+        let vhdx = Vhdx {
             file: reader,
             header,
-            log: Log { log_entries },
+            log,
             meta_data,
             bat_table,
         };
 
-        vhdx.try_log_replay()?;
+        // vhdx.try_log_replay()?;
 
         Ok(vhdx)
     }
@@ -109,7 +106,7 @@ impl Vhdx {
             return Ok(());
         }
 
-        let active_log = self.try_get_log();
+        let _active_log = Vhdx::try_get_log_sequence(&self.log.log_entries);
 
         Ok(())
     }
@@ -118,63 +115,68 @@ impl Vhdx {
         &self.header.header_1
     }
 
-    fn try_get_log(&mut self) -> Result<(), VhdxError> {
-        let header = self.header();
-        let log_guid = header.log_guid;
-        let log_offset = header.log_offset;
-        let log_length = header.log_length;
+    #[allow(dead_code)]
+    pub(crate) fn try_get_log_sequence(
+        log_entries: &Vec<LogEntry>,
+    ) -> Result<LogSequence, VhdxError> {
+        let mut active = LogSequence {
+            sequence_number: 0,
+            entries: Vec::new(),
+            head_value: 0,
+            tail_value: 0,
+        };
 
-        let mut current_tail = log_offset;
-        let mut old_tail = log_offset;
+        let mut read_items = 0;
+        let mut current_head_offset = 0;
+        let mut seq_tail_offset = 0;
 
         loop {
-            let mut head_value = current_tail;
-            self.file.seek(SeekFrom::Start(current_tail))?;
-            let mut sequence = LogSequence {
+            let mut candidate = LogSequence {
                 sequence_number: 0,
                 entries: Vec::new(),
+                head_value: 0,
+                tail_value: 0,
             };
 
-            loop {
-                let entry_offset = self.file.stream_position()?;
-                let signature = self.peek_signature()?;
-                match signature {
-                    Signature::Loge => {
-                        match LogEntry::deserialize(&mut self.file) {
-                            Ok(entry) => {
-                                // If we read too far we break
-                                if entry.header.log_guid != log_guid {
-                                    break;
-                                } else if sequence.is_empty() {
-                                    sequence.sequence_number = entry.header.seq_number;
-                                    sequence.entries.push(entry);
-                                    head_value = entry_offset;
-                                } else if entry.header.seq_number
-                                    == sequence
-                                        .entries
-                                        .last()
-                                        .expect("Should never happen")
-                                        .header
-                                        .seq_number
-                                        + 1
-                                {
-                                    sequence.entries.push(entry);
-                                    head_value = entry_offset;
-                                }
-                            }
-                            Err(e) => {
-                                VhdxError::ParseError("Could not parse log entry".to_owned());
-                            }
-                        }
-                    }
-                    // Otherwise that was last entry we break
-                    _ => break,
+            candidate.tail_value = seq_tail_offset;
+
+            for (i, entry) in log_entries[read_items..].iter().enumerate() {
+                if entry.validate().is_err() {
+                    read_items = i;
+                    break;
                 }
+
+                if candidate.is_empty() {
+                    candidate.sequence_number = entry.header.seq_number;
+                    candidate.entries.push(entry.clone());
+                    candidate.head_value = current_head_offset;
+                } else if entry.header.seq_number == candidate.sequence_number + 1 {
+                    candidate.entries.push(entry.clone());
+                    candidate.head_value = current_head_offset;
+                }
+
+                seq_tail_offset += entry.header.entry_length as u64;
+                current_head_offset += entry.header.entry_length as u64;
+                read_items += 1;
             }
-            break;
+
+            // Step 4
+            if !candidate.is_valid() {
+                // candidate is empty or not valid break and try the next entries
+                break;
+            }
+
+            // Step 5
+            if candidate.sequence_number > active.sequence_number {
+                active = candidate;
+            }
+
+            if read_items == log_entries.len() {
+                break;
+            }
         }
 
-        Ok(())
+        Ok(active)
     }
 
     fn peek_signature(&mut self) -> Result<Signature, VhdxError> {
@@ -184,19 +186,5 @@ impl Vhdx {
         let (_, signature) = peeker(&buffer)?;
         self.file.seek(SeekFrom::Current(-4))?;
         Ok(signature)
-    }
-}
-
-struct LogSequence {
-    sequence_number: u64,
-    entries: Vec<LogEntry>,
-}
-impl LogSequence {
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    fn is_valid() -> bool {
-        false
     }
 }
