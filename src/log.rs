@@ -297,7 +297,6 @@ pub(crate) enum Descriptor {
 
 impl Descriptor {
     const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
-    const SIZE: usize = 32;
 }
 
 #[derive(Clone)]

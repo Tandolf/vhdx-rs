@@ -1,4 +1,7 @@
-use std::io::{Read, Seek};
+use std::{
+    fmt::Display,
+    io::{Read, Seek},
+};
 
 use error::VhdxError;
 
@@ -28,7 +31,7 @@ pub trait Validation {
     fn validate(&self) -> Result<(), VhdxError>;
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Signature {
     Vhdxfile,
     Head,
@@ -38,5 +41,5 @@ pub enum Signature {
     Data,
     Desc,
     MetaData,
-    Unknown,
+    Unknown(Vec<u8>),
 }

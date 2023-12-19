@@ -6,6 +6,8 @@ use nom::{
 };
 use thiserror::Error;
 
+use crate::Signature;
+
 pub type Result<T, E = VhdxParseError<T>> = core::result::Result<T, E>;
 
 #[derive(Error, Debug)]
@@ -21,6 +23,15 @@ pub enum VhdxError {
 
     #[error("Missing region in Region Table: {0}")]
     MissingKnownRegion(&'static str),
+
+    #[error("Signature validation failed expected: {0:?}, got: {1:?}")]
+    SignatureError(Signature, Signature),
+
+    #[error("Calculate crc doesn't match expected: {0}, got: {1}")]
+    Crc32Error(u32, u32),
+
+    #[error("No valid VHDX header found")]
+    VhdxHeaderError,
 }
 
 impl From<VhdxParseError<&[u8]>> for VhdxError {

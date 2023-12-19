@@ -14,7 +14,7 @@ use crate::parse_utils::{
     t_bool_u32, t_creator, t_guid, t_sign_u32, t_sign_u64, t_u16, t_u32, t_u64,
 };
 use crate::vhdx::Vhdx;
-use crate::{Crc32, DeSerialise, Signature};
+use crate::{Crc32, DeSerialise, Signature, Validation};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -104,7 +104,7 @@ impl<T> DeSerialise<T> for FileTypeIdentifier {
 // offset 64 KB and the other at 128 KB. Only one header is considered current and in use at any
 // point in time.
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Header {
     // MUST be 0x68656164 which is a UTF-8 string representing "head".
     signature: Signature,
@@ -192,6 +192,10 @@ impl Header {
             log_offset,
         }
     }
+
+    pub fn sequence_number(&self) -> u64 {
+        self.seq_number
+    }
 }
 
 impl Crc32 for Header {
@@ -213,6 +217,23 @@ impl Crc32 for Header {
         digest.update(&self.log_length.to_le_bytes());
         digest.update(&self.log_offset.to_le_bytes());
         digest.update(&[0; 4016]);
+    }
+}
+
+impl Validation for Header {
+    fn validate(&self) -> std::result::Result<(), VhdxError> {
+        if self.signature != Signature::Head {
+            return Err(VhdxError::SignatureError(
+                Signature::Head,
+                self.signature.clone(),
+            ));
+        }
+
+        let crc = self.crc32();
+        if self.checksum != crc {
+            return Err(VhdxError::Crc32Error(self.checksum, crc));
+        }
+        Ok(())
     }
 }
 

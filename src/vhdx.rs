@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 use crate::bat::BatEntry;
 use crate::log::LogSequence;
 use crate::vhdx_header::Header;
@@ -12,6 +13,7 @@ use crate::{
 };
 use crate::{DeSerialise, Validation};
 use nom::combinator::peek;
+use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -34,13 +36,8 @@ impl Vhdx {
         let mut reader = File::options().read(true).write(true).open(path)?;
 
         let header = VhdxHeader::deserialize(&mut reader)?;
-        // Hardcoded to read the first header
-        let h = &header.header_1;
-        let h2 = &header.header_2;
 
-        // Calculating crc-32c for headers
-        let _calc_crc = h.crc32();
-        let _calc_crc2 = h2.crc32();
+        let h = get_current_header(&header.header_1, &header.header_2)?;
 
         let _ = reader.seek(SeekFrom::Start(h.log_offset));
         let mut log_entries = Vec::new();
@@ -115,7 +112,6 @@ impl Vhdx {
         &self.header.header_1
     }
 
-    #[allow(dead_code)]
     pub(crate) fn try_get_log_sequence(
         log_entries: &Vec<LogEntry>,
     ) -> Result<LogSequence, VhdxError> {
@@ -187,4 +183,26 @@ impl Vhdx {
         self.file.seek(SeekFrom::Current(-4))?;
         Ok(signature)
     }
+}
+
+#[allow(clippy::if_same_then_else)]
+fn get_current_header<'a>(h1: &'a Header, h2: &'a Header) -> Result<&'a Header, VhdxError> {
+    let r1 = h1.validate();
+    let r2 = h2.validate();
+    let current = if r1.is_err() && r2.is_err() {
+        return Err(VhdxError::VhdxHeaderError);
+    } else if r1.is_err() && r2.is_ok() {
+        dbg!("Header 2 selected");
+        h2
+    } else if r1.is_ok() && r2.is_err() {
+        dbg!("Header 1 selected");
+        h1
+    } else if h1.sequence_number() > h2.sequence_number() {
+        dbg!("Header 1 selected");
+        h1
+    } else {
+        dbg!("Header 2 selected");
+        h2
+    };
+    Ok(current)
 }
