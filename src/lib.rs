@@ -1,9 +1,5 @@
-use std::{
-    fmt::Display,
-    io::{Read, Seek},
-};
-
 use error::VhdxError;
+use std::io::{Read, Seek};
 
 pub mod bat;
 pub mod bits_parsers;
@@ -31,7 +27,7 @@ pub trait Validation {
     fn validate(&self) -> Result<(), VhdxError>;
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd)]
 pub enum Signature {
     Vhdxfile,
     Head,

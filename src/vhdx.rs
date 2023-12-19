@@ -9,11 +9,10 @@ use crate::{
     meta_data::MetaData,
     parse_utils::t_sign_u32,
     vhdx_header::{KnowRegion, VhdxHeader},
-    Crc32, Signature,
+    Signature,
 };
-use crate::{DeSerialise, Validation};
+use crate::{meta_data, Crc32, DeSerialise, Validation};
 use nom::combinator::peek;
-use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -36,8 +35,8 @@ impl Vhdx {
         let mut reader = File::options().read(true).write(true).open(path)?;
 
         let header = VhdxHeader::deserialize(&mut reader)?;
-
-        let h = get_current_header(&header.header_1, &header.header_2)?;
+        let (header_no, h) = get_current_header(&header.header_1, &header.header_2)?;
+        h.validate()?;
 
         let _ = reader.seek(SeekFrom::Start(h.log_offset));
         let mut log_entries = Vec::new();
@@ -62,14 +61,20 @@ impl Vhdx {
             }
         }
 
-        let meta_data_info = &header
-            .region_table_1
+        let r = match header_no {
+            1 => &header.region_table_1,
+            2 => &header.region_table_2,
+            _ => panic!("Impossiburru"),
+        };
+
+        r.validate()?;
+
+        let meta_data_info = &r
             .table_entries
             .get(&KnowRegion::MetaData)
             .ok_or(VhdxError::MissingKnownRegion("MetaData"))?;
 
-        let bat_table_info = &header
-            .region_table_1
+        let bat_table_info = &r
             .table_entries
             .get(&KnowRegion::Bat)
             .ok_or(VhdxError::MissingKnownRegion("Bat"))?;
@@ -186,23 +191,37 @@ impl Vhdx {
 }
 
 #[allow(clippy::if_same_then_else)]
-fn get_current_header<'a>(h1: &'a Header, h2: &'a Header) -> Result<&'a Header, VhdxError> {
-    let r1 = h1.validate();
-    let r2 = h2.validate();
+fn get_current_header<'a>(h1: &'a Header, h2: &'a Header) -> Result<(u32, &'a Header), VhdxError> {
+    let r1 = check_sign_and_crc(h1);
+    let r2 = check_sign_and_crc(h2);
+
     let current = if r1.is_err() && r2.is_err() {
+        // TODO: Better error handling
         return Err(VhdxError::VhdxHeaderError);
     } else if r1.is_err() && r2.is_ok() {
-        dbg!("Header 2 selected");
-        h2
+        (2, h2)
     } else if r1.is_ok() && r2.is_err() {
-        dbg!("Header 1 selected");
-        h1
+        (1, h1)
     } else if h1.sequence_number() > h2.sequence_number() {
-        dbg!("Header 1 selected");
-        h1
+        (1, h1)
     } else {
-        dbg!("Header 2 selected");
-        h2
+        (2, h2)
     };
     Ok(current)
+}
+
+fn check_sign_and_crc(header: &Header) -> Result<(), VhdxError> {
+    if header.signature != Signature::Head {
+        return Err(VhdxError::SignatureError(
+            Signature::Head,
+            header.signature.clone(),
+        ));
+    }
+
+    let crc = header.crc32();
+    if header.checksum != crc {
+        return Err(VhdxError::Crc32Error(header.checksum, crc));
+    }
+
+    Ok(())
 }

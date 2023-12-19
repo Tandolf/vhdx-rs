@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
+use std::iter;
 
 use crc::{Crc, CRC_32_ISCSI};
-use nom::bytes::complete::take;
 use nom::combinator::map;
 use nom::sequence::tuple;
 use nom::IResult;
@@ -107,11 +107,11 @@ impl<T> DeSerialise<T> for FileTypeIdentifier {
 #[derive(Debug, Clone)]
 pub struct Header {
     // MUST be 0x68656164 which is a UTF-8 string representing "head".
-    signature: Signature,
+    pub signature: Signature,
 
     // A CRC-32C hash over the entire 4-KB structure, with the Checksum field taking the value of
     // zero during the computation of the checksum value.
-    checksum: u32,
+    pub checksum: u32,
 
     // A 64-bit unsigned integer. A header is valid if the Signature and Checksum fields both
     // validate correctly. A header is current if it is the only valid header or if it is valid and
@@ -164,7 +164,6 @@ pub struct Header {
 }
 
 impl Header {
-    const SIZE: usize = 65536;
     const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
     pub const SIGN: &'static [u8] = &[0x68, 0x65, 0x61, 0x64];
     fn new(
@@ -222,17 +221,22 @@ impl Crc32 for Header {
 
 impl Validation for Header {
     fn validate(&self) -> std::result::Result<(), VhdxError> {
-        if self.signature != Signature::Head {
-            return Err(VhdxError::SignatureError(
-                Signature::Head,
-                self.signature.clone(),
-            ));
+        if self.version != 1 {
+            return Err(VhdxError::VersionError(self.version));
         }
 
-        let crc = self.crc32();
-        if self.checksum != crc {
-            return Err(VhdxError::Crc32Error(self.checksum, crc));
+        if self.log_version != 0 {
+            return Err(VhdxError::LogVersionError(self.log_version));
         }
+
+        if self.log_length as u64 % Vhdx::MB != 0 {
+            return Err(VhdxError::LogLengthError(self.log_version));
+        }
+
+        if self.log_offset % Vhdx::MB != 0 {
+            return Err(VhdxError::LogOffsetError(self.log_version));
+        }
+
         Ok(())
     }
 }
@@ -277,7 +281,7 @@ impl<T> DeSerialise<T> for Header {
     where
         T: Read + Seek,
     {
-        let mut buffer = [0; Header::SIZE];
+        let mut buffer = [0; (Vhdx::KB * 64) as usize];
         reader.read_exact(&mut buffer)?;
         let (_, headers) = parse_headers(&buffer)?;
         Ok(headers)
@@ -289,48 +293,80 @@ impl<T> DeSerialise<T> for Header {
 // stored at file offset 192 KB and file offset 256 KB. Updates to the region table structures must
 // be made through the log.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RegionTable {
     // MUST be 0x72656769, which is a UTF-8 string representing "regi".
     signature: Signature,
     // A CRC-32C hash over the entire 64-KB table, with the Checksum field taking the value of zero
     // during the computation of the checksum value.
     checksum: u32,
-    entry_count: usize,
 
-    pub table_entries: HashMap<KnowRegion, RTEntry>,
+    // Specifies the number of valid entries to follow. This MUST be less than or equal to 2,047.
+    entry_count: u32,
+
+    pub table_entries: BTreeMap<KnowRegion, RTEntry>,
 }
 
 impl RegionTable {
-    const HEADER_SIZE: usize = 16;
-    const ENTRY_SIZE: usize = 32;
-    const RT_HEADER_SIZE: usize = 65536;
     pub const SIGN: &'static [u8] = &[0x72, 0x65, 0x67, 0x69];
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
 
     const BAT_ENTRY: Uuid = uuid!("2DC27766F62342009D64115E9BFD4A08");
     const META_DATA_ENTRY: Uuid = uuid!("8B7CA20647904B9AB8FE575F050F886E");
 
-    fn new(signature: Signature, checksum: u32, entry_count: usize) -> Self {
+    fn new(signature: Signature, checksum: u32, entry_count: u32) -> Self {
         Self {
             signature,
             checksum,
             entry_count,
-            table_entries: HashMap::with_capacity(entry_count),
+            table_entries: BTreeMap::new(),
         }
     }
 }
 
-fn reserved(buffer: &[u8]) -> IResult<&[u8], &[u8], VhdxParseError<&[u8]>> {
-    take(4usize)(buffer)
+impl Validation for RegionTable {
+    fn validate(&self) -> std::result::Result<(), VhdxError> {
+        if Signature::Regi != self.signature {
+            return Err(VhdxError::SignatureError(
+                Signature::Regi,
+                self.signature.clone(),
+            ));
+        }
+
+        let crc = self.crc32();
+        if self.checksum != crc {
+            return Err(VhdxError::Crc32Error(self.checksum, crc));
+        }
+
+        if self.entry_count > 2047 {
+            return Err(VhdxError::RTEntryCountError(self.entry_count));
+        }
+
+        Ok(())
+    }
 }
 
-fn parse_header(buffer: &[u8]) -> IResult<&[u8], RegionTable, VhdxParseError<&[u8]>> {
-    map(
-        tuple((t_sign_u32, t_u32, t_u32, reserved)),
-        |(signature, checksum, entry_count, _)| {
-            RegionTable::new(signature, checksum, entry_count as usize)
-        },
-    )(buffer)
+impl Crc32 for RegionTable {
+    fn crc32(&self) -> u32 {
+        let mut length = Vhdx::KB * 64;
+        let mut digest = RegionTable::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        length -= 16;
+        self.table_entries.iter().for_each(|(_, entry)| {
+            entry.crc32_from_digest(&mut digest);
+            length -= 32;
+        });
+        let dead_space: Vec<u8> = iter::repeat(0).take(length as usize).collect();
+        digest.update(&dead_space);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(RegionTable::SIGN);
+        digest.update(&[0; 4]);
+        digest.update(&self.entry_count.to_le_bytes());
+        digest.update(&[0; 4]);
+    }
 }
 
 impl<T> DeSerialise<T> for RegionTable {
@@ -340,9 +376,14 @@ impl<T> DeSerialise<T> for RegionTable {
     where
         T: Read + Seek,
     {
-        let mut buffer = [0; RegionTable::HEADER_SIZE];
+        let mut buffer = [0; 16];
         reader.read_exact(&mut buffer)?;
-        let (_, mut header) = parse_header(&buffer)?;
+        let (_, mut header) = map(
+            tuple((t_sign_u32, t_u32, t_u32, t_u32)),
+            |(signature, checksum, entry_count, _)| {
+                RegionTable::new(signature, checksum, entry_count)
+            },
+        )(&buffer)?;
         for _ in 0..header.entry_count {
             let entry = RTEntry::deserialize(reader)?;
             let known_region = match entry.guid {
@@ -358,7 +399,7 @@ impl<T> DeSerialise<T> for RegionTable {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RTEntry {
     // Guid (16 bytes): Specifies a 128-bit identifier for the object (a GUID in binary form) and
     // MUST be unique within the table.
@@ -374,6 +415,7 @@ pub struct RTEntry {
     required: bool,
 }
 impl RTEntry {
+    const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
     fn new(guid: Uuid, file_offset: u64, length: u32, required: bool) -> Self {
         Self {
             guid,
@@ -384,11 +426,19 @@ impl RTEntry {
     }
 }
 
-fn parse_entry(buffer: &[u8]) -> IResult<&[u8], RTEntry, VhdxParseError<&[u8]>> {
-    map(
-        tuple((t_guid, t_u64, t_u32, t_bool_u32)),
-        |(guid, file_offset, length, required)| RTEntry::new(guid, file_offset, length, required),
-    )(buffer)
+impl Crc32 for RTEntry {
+    fn crc32(&self) -> u32 {
+        let mut digest = RTEntry::CRC.digest();
+        self.crc32_from_digest(&mut digest);
+        digest.finalize()
+    }
+
+    fn crc32_from_digest(&self, digest: &mut crc::Digest<u32>) {
+        digest.update(&self.guid.to_bytes_le());
+        digest.update(&self.file_offset.to_le_bytes());
+        digest.update(&self.length.to_le_bytes());
+        digest.update(&(self.required as u32).to_le_bytes());
+    }
 }
 
 impl<T> DeSerialise<T> for RTEntry {
@@ -399,14 +449,18 @@ impl<T> DeSerialise<T> for RTEntry {
         T: Read + Seek,
     {
         let mut buffer = [0; 32];
-
         reader.read_exact(&mut buffer)?;
-        let (_, entry) = parse_entry(&buffer)?;
+        let (_, entry) = map(
+            tuple((t_guid, t_u64, t_u32, t_bool_u32)),
+            |(guid, file_offset, length, required)| {
+                RTEntry::new(guid, file_offset, length, required)
+            },
+        )(&buffer)?;
         Ok(entry)
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Hash)]
 pub enum KnowRegion {
     Bat,
     MetaData,
@@ -415,9 +469,8 @@ pub enum KnowRegion {
 #[cfg(test)]
 mod tests {
 
-    use std::io::Cursor;
-
     use crate::Signature;
+    use std::io::Cursor;
     use uuid::uuid;
 
     use super::*;
@@ -511,7 +564,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        values.resize(Header::SIZE, 0);
+        values.resize(Vhdx::KB as usize * 64, 0);
 
         let mut values = Cursor::new(values);
         let headers = Header::deserialize(&mut values).unwrap();
