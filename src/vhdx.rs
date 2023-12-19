@@ -11,7 +11,7 @@ use crate::{
     vhdx_header::{KnowRegion, VhdxHeader},
     Signature,
 };
-use crate::{meta_data, Crc32, DeSerialise, Validation};
+use crate::{Crc32, DeSerialise, Validation};
 use nom::combinator::peek;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

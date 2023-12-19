@@ -226,15 +226,21 @@ impl Validation for Header {
         }
 
         if self.log_version != 0 {
-            return Err(VhdxError::LogVersionError(self.log_version));
+            return Err(VhdxError::NotAllowedToBeZero("Header Log Version"));
         }
 
         if self.log_length as u64 % Vhdx::MB != 0 {
-            return Err(VhdxError::LogLengthError(self.log_version));
+            return Err(VhdxError::NotDivisbleByMB(
+                "Header Log Length",
+                self.log_length.into(),
+            ));
         }
 
         if self.log_offset % Vhdx::MB != 0 {
-            return Err(VhdxError::LogOffsetError(self.log_version));
+            return Err(VhdxError::NotDivisbleByMB(
+                "Header Log Offset",
+                self.log_offset,
+            ));
         }
 
         Ok(())

@@ -288,6 +288,54 @@ impl Crc32 for LogHeader {
     }
 }
 
+impl Validation for LogHeader {
+    fn validate(&self) -> Result<(), VhdxError> {
+        if self.signature != Signature::Loge {
+            return Err(VhdxError::SignatureError(
+                Signature::Loge,
+                self.signature.clone(),
+            ));
+        }
+
+        // TODO: Calc checksum
+
+        if self.entry_length as u64 % (Vhdx::KB * 4) != 0 {
+            return Err(VhdxError::NotDivisbleByMB(
+                "Log Entry Length",
+                self.entry_length as u64,
+            ));
+        }
+
+        if self.tail as u64 % (Vhdx::KB * 4) != 0 {
+            return Err(VhdxError::NotDivisbleByMB("Log Tail", self.tail as u64));
+        }
+
+        if self.seq_number == 0 {
+            return Err(VhdxError::NotAllowedToBeZero("Log Sequence Number"));
+        }
+
+        if self.descript_count == 0 {
+            return Err(VhdxError::NotAllowedToBeZero("Log Description Count"));
+        }
+
+        if self.flushed_file_offset % Vhdx::MB != 0 {
+            return Err(VhdxError::NotDivisbleByMB(
+                "Flushed File Offset",
+                self.flushed_file_offset,
+            ));
+        }
+
+        if self.last_file_offset % Vhdx::MB != 0 {
+            return Err(VhdxError::NotDivisbleByMB(
+                "Last File Offset",
+                self.last_file_offset,
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum Descriptor {
@@ -489,7 +537,6 @@ pub(crate) struct DataSector {
 impl DataSector {
     pub(crate) const SIGN: &'static [u8] = &[0x64, 0x61, 0x74, 0x61];
     const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
-    const SIZE: usize = 4096;
 
     fn new(signature: Signature, seq_high: u32, data: &[u8], seq_low: u32) -> Self {
         Self {

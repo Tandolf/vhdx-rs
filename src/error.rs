@@ -36,17 +36,17 @@ pub enum VhdxError {
     #[error("VHDX Version error should be 1 got: {0}")]
     VersionError(u16),
 
-    #[error("VHDX LogVersion error should be 10 got: {0}")]
-    LogVersionError(u16),
-
-    #[error("LogLength should be a multiple of 1 MB length is currently: {0}")]
-    LogLengthError(u16),
-
-    #[error("LogOffset should be a multiple of 1 MB length is currently: {0}")]
-    LogOffsetError(u16),
-
     #[error("RegionTable EntryCount must be less than 2047 bytes got: {0} bytes")]
     RTEntryCountError(u32),
+
+    #[error("{0} value, is not dividable by 1MB: {1}")]
+    NotDivisbleByMB(&'static str, u64),
+
+    #[error("{0} value, is not dividable by 4096 (4KB): {1}")]
+    NotDivisbleBy4KB(&'static str, u64),
+
+    #[error("{0} number is not allowed to be zero")]
+    NotAllowedToBeZero(&'static str),
 }
 
 impl From<VhdxParseError<&[u8]>> for VhdxError {
